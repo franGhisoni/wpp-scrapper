@@ -24,7 +24,13 @@ app.use('/api', apiRoutes);
 
 // Iniciar servidor
 app.listen(PORT, () => {
-  console.log(`⚡️ Server is running at http://localhost:${PORT}`);
-  console.log(`📑 Health check available at http://localhost:${PORT}/health`);
-  console.log(`🚀 API endpoints available at http://localhost:${PORT}/api`);
+  // Determinar la URL base según el entorno
+  const isProduction = process.env.NODE_ENV === 'production';
+  const publicUrl = process.env.PUBLIC_URL || 'https://wpp-scrapper.onrender.com';
+  const baseUrl = isProduction ? publicUrl : `http://localhost:${PORT}`;
+  
+  console.log(`⚡️ Server is running at ${baseUrl}`);
+  console.log(`📑 Health check available at ${baseUrl}/health`);
+  console.log(`🚀 API endpoints available at ${baseUrl}/api`);
+  console.log('==> Your service is live 🎉');
 }); 
