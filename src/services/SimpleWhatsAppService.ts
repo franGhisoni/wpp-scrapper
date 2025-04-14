@@ -126,9 +126,14 @@ class SimpleWhatsAppService extends EventEmitter {
             '--no-first-run',
             '--no-zygote',
             '--single-process', // <- this one doesn't works in Windows
-            '--disable-accelerated-2d-canvas'
+            '--disable-accelerated-2d-canvas',
+            '--disable-web-security',
+            '--disable-features=site-per-process',
+            '--allow-insecure-localhost',
+            '--window-size=1280,960'
           ],
-          executablePath: process.env.CHROMIUM_PATH || undefined
+          executablePath: process.env.CHROMIUM_PATH || process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+          ignoreHTTPSErrors: true
         }
       });
       
