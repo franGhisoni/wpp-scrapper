@@ -1,0 +1,36 @@
+version: '3'
+
+services:
+  whatsapp-api:
+    build: .
+    container_name: whatsapp-api
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./sessions:/usr/src/app/.wwebjs_auth
+      - ./tmp:/usr/src/app/tmp
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - STRAPI_URL=http://strapi:1337
+      - STRAPI_API_TOKEN=${STRAPI_API_TOKEN}
+      - AUTO_CLOSE_AFTER_SCAN=true
+      - AUTO_CLOSE_TIMEOUT=300000
+    depends_on:
+      - strapi
+
+  strapi:
+    image: strapi/strapi
+    container_name: strapi
+    restart: unless-stopped
+    ports:
+      - "1337:1337"
+    volumes:
+      - ./strapi-data:/srv/app
+    environment:
+      - DATABASE_CLIENT=sqlite
+      - DATABASE_FILENAME=.tmp/data.db
+
+volumes:
+  strapi-data: 

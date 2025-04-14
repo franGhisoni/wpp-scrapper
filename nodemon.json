@@ -1,0 +1,6 @@
+{
+  "watch": ["src"],
+  "ext": "ts",
+  "ignore": ["sessions/**/*", "src/**/*.spec.ts", "node_modules", "**/_temp_backup/**"],
+  "exec": "ts-node src/index.ts"
+} 

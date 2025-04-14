@@ -1,0 +1,51 @@
+# Environment variables
+/.env
+/.env.local
+/.env.*.local
+
+# Project specific
+/.groupedtimelineinclude
+/.wwebjs_auth
+/.wwebjs_cache
+
+# Dependency directories
+/node_modules
+/jspm_packages
+
+# Build output
+/dist
+/build
+/out
+
+# Debug logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# Testing
+/coverage
+/.nyc_output
+
+# Temp directories
+/tmp
+/tmp_test
+/.tmp
+
+# IDE specific files
+/.idea
+/.vscode
+*.sublime-*
+*.swp
+*.swo
+
+# OS specific files
+.DS_Store
+Thumbs.db
+*.bak
+*~
+
+# Misc
+.cache/
+.parcel-cache/
+.next/
