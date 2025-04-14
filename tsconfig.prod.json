@@ -1,0 +1,19 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "sourceMap": false,
+    "removeComments": true
+  },
+  "exclude": [
+    "node_modules",
+    "**/*.test.ts",
+    "**/*.spec.ts",
+    "**/*.e2e-spec.ts",
+    "src/routes/whatsapp.routes.ts", 
+    "src/routes/strapi.routes.ts",
+    "src/controllers/WhatsAppController.ts"
+  ],
+  "include": [
+    "src/**/*.ts"
+  ]
+} 

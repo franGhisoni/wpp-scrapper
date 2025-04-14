@@ -11,7 +11,7 @@
     "dev:prod": "cross-env NODE_ENV=production STRAPI_URL=https://tib-core-develop.onrender.com  STRAPI_API_TOKEN=a7fbe2c4f285bf453e24e7f6872b2c259200bfa4e9692fd2207077456ff04654ea6246c4ba568b0611b0a99a1164f3e5c8a7584ca68681d3e28e7b775d041f43578bb69bf19d527838b7f3837200c0b63ba69be0823fb48836249dbd89f86c934afed94d46be9a02653dbc223b0dda72f09c679a43d699680f3416144f5b1857 USE_STRAPI=true nodemon --exec ts-node src/index.ts",
     "start:prod": "cross-env NODE_ENV=production STRAPI_URL=https://tib-core.onrender.com USE_STRAPI=true node build/index.js",
     "clean": "rimraf build",
-    "build": "npm run clean && tsc",
+    "build": "npm run clean && tsc --project tsconfig.prod.json",
     "render-build": "npm run build",
     "render-start": "node build/index.js",
     "lint": "eslint . --ext .ts",
