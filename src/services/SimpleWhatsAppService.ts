@@ -109,6 +109,10 @@ class SimpleWhatsAppService extends EventEmitter {
       // Verificar y limpiar sesiones antiguas si es necesario
       await this.cleanLocalSessionIfNeeded();
       
+      // Determinar si ejecutar en modo headless
+      const headless = process.env.BROWSER_HEADLESS !== 'false';
+      console.log(`[${this.clientId}] Configurado Puppeteer en modo headless: ${headless}`);
+      
       // Inicializar cliente con LocalAuth
       this.client = new Client({
         authStrategy: new LocalAuth({
@@ -116,7 +120,7 @@ class SimpleWhatsAppService extends EventEmitter {
           dataPath: this.clientPath
         }),
         puppeteer: {
-          headless: process.env.BROWSER_HEADLESS !== 'false', // true por defecto a menos que se especifique false
+          headless: headless ? 'new' as const : false, // Usar 'new' headless en lugar de true (recomendado para nuevas versiones)
           args: [
             '--no-sandbox', 
             '--disable-extensions',
@@ -130,10 +134,17 @@ class SimpleWhatsAppService extends EventEmitter {
             '--disable-web-security',
             '--disable-features=site-per-process',
             '--allow-insecure-localhost',
-            '--window-size=1280,960'
+            '--window-size=1280,960',
+            '--disable-web-security',
+            '--disable-infobars',
+            '--ignore-certificate-errors',
+            '--ignore-certificate-errors-spki-list',
+            '--ignore-ssl-errors'
           ],
           executablePath: process.env.CHROMIUM_PATH || process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-          ignoreHTTPSErrors: true
+          ignoreHTTPSErrors: true,
+          timeout: 90000, // Aumentar timeout a 90 segundos para entornos lentos
+          protocolTimeout: 90000 // También aumentar timeout de protocolo
         }
       });
       
