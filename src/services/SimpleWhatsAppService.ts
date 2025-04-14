@@ -120,7 +120,7 @@ class SimpleWhatsAppService extends EventEmitter {
           dataPath: this.clientPath
         }),
         puppeteer: {
-          headless: headless ? 'new' as const : false, // Usar 'new' headless en lugar de true (recomendado para nuevas versiones)
+          headless: headless ? true : false, // Versión compatible con el tipo esperado boolean | "chrome"
           args: [
             '--no-sandbox', 
             '--disable-extensions',
@@ -143,8 +143,7 @@ class SimpleWhatsAppService extends EventEmitter {
           ],
           executablePath: process.env.CHROMIUM_PATH || process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
           ignoreHTTPSErrors: true,
-          timeout: 90000, // Aumentar timeout a 90 segundos para entornos lentos
-          protocolTimeout: 90000 // También aumentar timeout de protocolo
+          timeout: 90000, // Aumentar timeout para entornos más lentos
         }
       });
       
