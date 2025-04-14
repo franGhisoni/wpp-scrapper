@@ -1,50 +1,105 @@
-# WhatsApp Web API
+# WhatsApp API
 
-API simplificada que utiliza whatsapp-web.js para interactuar con WhatsApp Web, escanear grupos y obtener métricas.
+API REST para WhatsApp Web con soporte para escaneo de grupos y gestión de sesiones en Strapi.
 
 ## Características
 
-- Sistema de autenticación robusto usando RemoteAuth
-- Persistencia de sesiones en Strapi
-- Escaneo de grupos de WhatsApp
-- Obtención de métricas de grupos
-- Manejo eficiente de recursos
+- Autenticación con QR Code para WhatsApp Web
+- Escaneo de grupos y miembros de WhatsApp
+- Almacenamiento de sesiones en Strapi CMS
+- Gestión de métricas de grupos
 
 ## Requisitos
 
-- Node.js 14 o superior
-- Strapi CMS (puede estar en un servidor remoto)
-- Token de API de Strapi
+- Node.js 16+
+- Strapi CMS instancia (opcional, pero recomendado)
+- Navegador compatible con Puppeteer
 
-## Configuración
+## Instalación
 
-1. Clona el repositorio
-2. Instala las dependencias: `npm install`
-3. Crea un archivo `.env` con la siguiente configuración:
+```bash
+npm install
+```
+
+## Variables de entorno
+
+Crea un archivo `.env` con las siguientes variables:
 
 ```
-PORT=3001
+PORT=9877
+NODE_ENV=development
 STRAPI_URL=http://127.0.0.1:1337
-STRAPI_API_TOKEN=tu_token_de_strapi
+STRAPI_API_TOKEN=your-token-here
+USE_STRAPI=true
+BROWSER_HEADLESS=true
+SESSION_STORAGE_PATH=./sessions
 AUTO_CLOSE_AFTER_SCAN=true
-AUTO_CLOSE_TIMEOUT=180000
+AUTO_CLOSE_TIMEOUT=300000
 ```
 
-4. Configura Strapi ejecutando: `npm run setup-strapi`
-5. Inicia la aplicación: `npm run dev`
+## Ejecutar en desarrollo
 
-## Actualización
-
-Si estás actualizando desde una versión anterior, ejecuta:
-
-```
-npm run upgrade
+```bash
+npm run dev
 ```
 
-Este comando realizará:
-- Limpieza de directorios temporales
-- Verificación de variables de entorno
-- Configuración del esquema en Strapi
+## Compilar para producción
+
+```bash
+npm run build
+```
+
+## Ejecutar en producción
+
+```bash
+npm start
+```
+
+## Configuración de Strapi
+
+Para configurar el esquema en Strapi:
+
+```bash
+npm run setup-strapi
+```
+
+## Despliegue en Render
+
+### Configuración para Render
+
+1. **Tipo de Servicio**: Web Service
+2. **Environment**: Node
+3. **Build Command**: `npm run render-build`
+4. **Start Command**: `npm run render-start`
+5. **Root Directory**: `/` (raíz del repositorio)
+
+### Variables de Entorno en Render
+
+Configura las siguientes variables de entorno en la consola de Render:
+
+- `PORT`: 9877 (Render asignará automáticamente un puerto)
+- `NODE_ENV`: production
+- `STRAPI_URL`: URL de tu instancia de Strapi
+- `STRAPI_API_TOKEN`: Token de API de Strapi
+- `USE_STRAPI`: true
+- `BROWSER_HEADLESS`: true
+- `SESSION_STORAGE_PATH`: ./sessions
+- `AUTO_CLOSE_AFTER_SCAN`: true
+- `AUTO_CLOSE_TIMEOUT`: 300000
+
+### Requisitos Adicionales
+
+En la configuración de Render, asegúrate de:
+
+1. Seleccionar un plan con recursos suficientes para ejecutar Puppeteer
+2. Asignar suficiente memoria para el servicio (mínimo 512MB)
+3. Configurar Puppeteer para ejecutarse en entorno serverless (ya está incluido en la configuración)
+
+### Problemas Conocidos
+
+- Puppeteer puede requerir ajustes adicionales en entornos sin interfaz gráfica
+- El QR code debe ser escaneado rápidamente cuando se genera en entornos cloud
+- Las sesiones pueden expirar más rápido en entornos de producción
 
 ## Endpoints API
 

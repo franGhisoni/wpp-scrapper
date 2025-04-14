@@ -12,6 +12,8 @@
     "start:prod": "cross-env NODE_ENV=production STRAPI_URL=https://tib-core.onrender.com USE_STRAPI=true node build/index.js",
     "clean": "rimraf build",
     "build": "npm run clean && tsc",
+    "render-build": "npm run build",
+    "render-start": "node build/index.js",
     "lint": "eslint . --ext .ts",
     "init-db": "ts-node src/utils/initDb.ts",
     "test-auth": "ts-node src/scripts/test-remote-auth.ts",

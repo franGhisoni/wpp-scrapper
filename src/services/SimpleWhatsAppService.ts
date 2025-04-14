@@ -53,21 +53,38 @@ class SimpleWhatsAppService extends EventEmitter {
 
   private constructor() {
     super();
-    console.log('SimpleWhatsAppService - Variables de entorno:');
-    console.log('BROWSER_HEADLESS:', process.env.BROWSER_HEADLESS || 'No definido (usando true por defecto)');
-    console.log('AUTO_CLOSE_AFTER_SCAN:', process.env.AUTO_CLOSE_AFTER_SCAN || 'No definido');
+    // Debug environment for deployment
+    console.log('💬 SimpleWhatsAppService - Iniciando servicio');
+    console.log('🌐 Entorno:', process.env.NODE_ENV || 'No definido (usando development por defecto)');
+    console.log('🚪 Puerto:', process.env.PORT || '9877 (por defecto)');
+    console.log('🔗 Strapi URL:', SimpleWhatsAppService.strapiUrl);
+    console.log('🔑 Strapi API Token configurado:', SimpleWhatsAppService.strapiApiToken ? 'Sí' : 'No');
+    console.log('🔍 BROWSER_HEADLESS:', process.env.BROWSER_HEADLESS || 'true (por defecto)');
+    console.log('⏱️ AUTO_CLOSE_AFTER_SCAN:', process.env.AUTO_CLOSE_AFTER_SCAN || 'No definido');
+    console.log('📁 Ruta de sesión:', this.clientPath);
     
     // Configure axios for IPv4
     const http = require('http');
     const https = require('https');
     
     // Set up IPv4 agents to avoid IPv6 issues
-    const httpAgent = new http.Agent({ family: 4 });
-    const httpsAgent = new https.Agent({ family: 4 });
+    const httpAgent = new http.Agent({ 
+      family: 4,
+      keepAlive: true,
+      timeout: 60000 // Increase timeout for cloud environments
+    });
+    
+    const httpsAgent = new https.Agent({ 
+      family: 4,
+      keepAlive: true,
+      timeout: 60000, // Increase timeout for cloud environments
+      rejectUnauthorized: process.env.NODE_ENV !== 'production' // Only disable cert validation in dev
+    });
     
     // Apply to axios globally
     axios.defaults.httpAgent = httpAgent;
     axios.defaults.httpsAgent = httpsAgent;
+    axios.defaults.timeout = 60000; // Increase default timeout
   }
 
   public static getInstance(): SimpleWhatsAppService {
@@ -104,8 +121,14 @@ class SimpleWhatsAppService extends EventEmitter {
             '--no-sandbox', 
             '--disable-extensions',
             '--disable-gpu',
-            '--disable-dev-shm-usage' // Añadir para mejorar estabilidad
-          ]
+            '--disable-dev-shm-usage',
+            '--disable-setuid-sandbox',
+            '--no-first-run',
+            '--no-zygote',
+            '--single-process', // <- this one doesn't works in Windows
+            '--disable-accelerated-2d-canvas'
+          ],
+          executablePath: process.env.CHROMIUM_PATH || undefined
         }
       });
       
