@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import SimpleWhatsAppService from '../services/SimpleWhatsAppService';
+import fs from 'fs';
 
 /**
  * Controlador simplificado para WhatsApp
@@ -29,106 +30,164 @@ class SimpleWhatsAppController {
    */
   async generateQR(req: Request, res: Response): Promise<void> {
     try {
-      // Ya está autenticado, no generamos QR
+      console.log('Iniciando generateQR');
+      
+      // Verificar si ya está autenticado
       if (SimpleWhatsAppService.isClientAuthenticated()) {
+        console.log('Cliente ya está autenticado en generateQR');
         res.json({
           status: 'AUTHENTICATED',
           message: 'Cliente ya autenticado'
         });
         return;
       }
-
-      // Si hay un QR existente, lo devolvemos
+      
+      // Verificar si ya existe un QR
       const existingQR = SimpleWhatsAppService.getQRCode();
       if (existingQR) {
+        console.log('QR existente encontrado en generateQR');
         res.json({
           status: 'NEED_SCAN',
           qr: existingQR
         });
         return;
       }
-
-      // Inicializar cliente solo si no está iniciado
-      await SimpleWhatsAppService.initialize();
-
-      // Esperar a que el código QR esté disponible o se alcance timeout
-      const timeoutMs = 60000; // 60 segundos
-      const startTime = Date.now();
       
-      // Función que espera el QR con timeout
+      // Verificar si existe un directorio de sesión previa
+      const sessionDir = './.wwebjs_auth/session-whatsapp-api';
+      const sessionExists = fs.existsSync(sessionDir);
+      console.log(`Verificando existencia de sesión en ${sessionDir}: ${sessionExists}`);
+      
+      // Ajustar el timeout basado en la existencia de sesión
+      // Si hay sesión, esperamos menos tiempo ya que debería autenticarse rápido
+      const timeoutMs = sessionExists ? 15000 : 60000;
+      console.log(`Timeout configurado: ${timeoutMs}ms`);
+      
+      // Inicializar cliente WhatsApp
+      console.log('Inicializando cliente WhatsApp');
+      await SimpleWhatsAppService.initialize();
+      
+      // Si hay una sesión previa, esperar brevemente para dar tiempo a la autenticación automática
+      if (sessionExists) {
+        console.log('Sesión existente detectada, esperando 5 segundos para autenticación automática');
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        
+        // Verificar de nuevo si se autenticó
+        if (SimpleWhatsAppService.isClientAuthenticated()) {
+          console.log('Cliente autenticado automáticamente después de la espera');
+          res.json({
+            status: 'AUTHENTICATED',
+            message: 'Cliente autenticado automáticamente'
+          });
+          return;
+        }
+      }
+      
+      // Definir la función para esperar el QR con timeout
       const waitForQR = async (): Promise<string | null> => {
-        return new Promise((resolve) => {
-          // Crear timeout
-          const timeout = setTimeout(() => {
-            console.log("Timeout esperando QR");
+        return new Promise<string | null>((resolve) => {
+          // Comprobar primero si ya está autenticado
+          if (SimpleWhatsAppService.isClientAuthenticated()) {
+            console.log('Cliente ya autenticado al inicio de waitForQR');
+            resolve(null);
+            return;
+          }
+
+          // Comprobar si ya hay un QR existente
+          const existingQR = SimpleWhatsAppService.getQRCode();
+          if (existingQR) {
+            console.log('QR existente encontrado en waitForQR');
+            resolve(existingQR);
+            return;
+          }
+
+          // Establecer timeout para evitar esperar indefinidamente
+          const qrTimeout = setTimeout(() => {
+            console.log(`Timeout esperando QR después de ${timeoutMs}ms`);
+            SimpleWhatsAppService.removeListener('qr', onQR);
+            SimpleWhatsAppService.removeListener('authenticated', onAuthenticated);
+            clearInterval(checkExistingQR);
             resolve(null);
           }, timeoutMs);
-          
-          // Evento QR
+
+          // Función para manejar el evento de QR
           const onQR = (qr: string) => {
-            clearTimeout(timeout);
+            console.log('Evento QR recibido');
+            clearTimeout(qrTimeout);
             SimpleWhatsAppService.removeListener('qr', onQR);
             SimpleWhatsAppService.removeListener('authenticated', onAuthenticated);
+            clearInterval(checkExistingQR);
             resolve(qr);
           };
-          
-          // Evento autenticación
+
+          // Función para manejar el evento de autenticación
           const onAuthenticated = () => {
-            clearTimeout(timeout);
+            console.log('Evento authenticated recibido durante waitForQR');
+            clearTimeout(qrTimeout);
             SimpleWhatsAppService.removeListener('qr', onQR);
             SimpleWhatsAppService.removeListener('authenticated', onAuthenticated);
+            clearInterval(checkExistingQR);
             resolve(null);
           };
-          
-          // Registrar listeners
-          SimpleWhatsAppService.on('qr', onQR);
-          SimpleWhatsAppService.on('authenticated', onAuthenticated);
-          
-          // Verificar si ya tenemos QR (para caso donde el evento ya pasó)
-          const checkExisting = () => {
+
+          // Verificar periódicamente si hay un QR existente (por si se perdió el evento)
+          const checkExistingQR = setInterval(() => {
             const qr = SimpleWhatsAppService.getQRCode();
             if (qr) {
-              clearTimeout(timeout);
+              console.log('QR encontrado durante verificación periódica');
+              clearTimeout(qrTimeout);
               SimpleWhatsAppService.removeListener('qr', onQR);
               SimpleWhatsAppService.removeListener('authenticated', onAuthenticated);
+              clearInterval(checkExistingQR);
               resolve(qr);
             }
-          };
-          
-          // Verificar inmediatamente
-          checkExisting();
+            
+            // También verificar si se autenticó
+            if (SimpleWhatsAppService.isClientAuthenticated()) {
+              console.log('Cliente autenticado durante verificación periódica');
+              clearTimeout(qrTimeout);
+              SimpleWhatsAppService.removeListener('qr', onQR);
+              SimpleWhatsAppService.removeListener('authenticated', onAuthenticated);
+              clearInterval(checkExistingQR);
+              resolve(null);
+            }
+          }, 1000);
+
+          // Registrar listeners para eventos de QR y autenticación
+          SimpleWhatsAppService.on('qr', onQR);
+          SimpleWhatsAppService.on('authenticated', onAuthenticated);
         });
       };
       
-      // Esperar QR
-      const qrCode = await waitForQR();
+      // Esperar por el QR con timeout
+      console.log(`Esperando QR (timeout: ${timeoutMs}ms)`);
+      const qr = await waitForQR();
       
-      // Verificar si mientras esperábamos se autenticó
-      if (SimpleWhatsAppService.isClientAuthenticated()) {
-        res.json({
-          status: 'AUTHENTICATED',
-          message: 'Cliente autenticado durante la generación de QR'
-        });
-        return;
-      }
-      
-      if (qrCode) {
+      if (qr) {
+        console.log('QR recibido, enviando respuesta');
         res.json({
           status: 'NEED_SCAN',
-          qr: qrCode
+          qr
+        });
+      } else if (SimpleWhatsAppService.isClientAuthenticated()) {
+        console.log('Cliente autenticado después de esperar QR');
+        res.json({
+          status: 'AUTHENTICATED',
+          message: 'Cliente autenticado'
         });
       } else {
+        console.log('Timeout esperando QR, enviando error');
         res.status(408).json({
           status: 'TIMEOUT',
-          message: 'Tiempo de espera agotado generando QR'
+          message: 'Timeout esperando código QR'
         });
       }
-    } catch (error) {
-      console.error('Error generando QR:', error);
+    } catch (error: any) {
+      console.error('Error en generateQR:', error);
       res.status(500).json({
         status: 'ERROR',
         message: 'Error generando código QR',
-        error: error instanceof Error ? error.message : 'Error desconocido'
+        error: error.message || 'Error desconocido'
       });
     }
   }
@@ -165,6 +224,8 @@ class SimpleWhatsAppController {
   async getGroupMetrics(req: Request, res: Response): Promise<void> {
     try {
       const { groupName } = req.params;
+      // Obtener el parámetro since de los query params (horas atrás)
+      const since = req.query.since ? parseInt(req.query.since as string) : 24;
       
       if (!groupName) {
         res.status(400).json({
@@ -174,7 +235,8 @@ class SimpleWhatsAppController {
         return;
       }
       
-      const metrics = await SimpleWhatsAppService.getGroupMetrics(groupName);
+      console.log(`Obteniendo métricas para grupo "${groupName}" con since=${since} horas`);
+      const metrics = await SimpleWhatsAppService.getGroupMetrics(groupName, since);
       
       res.status(200).json({ success: true, data: metrics });
     } catch (error) {

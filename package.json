@@ -23,7 +23,9 @@
     "test-strapi-connection": "ts-node src/scripts/test-strapi-connection.ts",
     "upgrade": "ts-node src/scripts/upgrade-service.ts",
     "force-cleanup": "ts-node src/scripts/force-cleanup.ts",
-    "setup-strapi-groups": "ts-node src/scripts/create-strapi-groups-schema.ts"
+    "setup-strapi-groups": "ts-node src/scripts/create-strapi-groups-schema.ts",
+    "setup-group-members": "ts-node src/scripts/create-group-members-schema.ts",
+    "clean-duplicates": "ts-node src/scripts/clean-duplicate-groups.ts"
   },
   "keywords": [
     "express",
