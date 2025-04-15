@@ -15,17 +15,7 @@
     "render-build": "npm run build",
     "render-start": "node build/index.js",
     "lint": "eslint . --ext .ts",
-    "init-db": "ts-node src/utils/initDb.ts",
-    "test-auth": "ts-node src/scripts/test-remote-auth.ts",
-    "test-strapi-store": "ts-node src/scripts/test-strapi-store.ts",
-    "test-strapi-remote": "ts-node src/scripts/test-strapi-remote-auth.ts",
-    "setup-strapi": "ts-node src/scripts/create-strapi-schema.ts",
-    "test-strapi-connection": "ts-node src/scripts/test-strapi-connection.ts",
-    "upgrade": "ts-node src/scripts/upgrade-service.ts",
-    "force-cleanup": "ts-node src/scripts/force-cleanup.ts",
-    "setup-strapi-groups": "ts-node src/scripts/create-strapi-groups-schema.ts",
-    "setup-group-members": "ts-node src/scripts/create-group-members-schema.ts",
-    "clean-duplicates": "ts-node src/scripts/clean-duplicate-groups.ts"
+    "init-db": "ts-node src/utils/initDb.ts"
   },
   "keywords": [
     "express",

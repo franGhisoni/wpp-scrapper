@@ -74,5 +74,5 @@ ENV AUTO_CLOSE_TIMEOUT=300000
 # Open port
 EXPOSE 3001
 
-# Run upgrade script and start app
-CMD npm run upgrade && npm start 
+# Start app
+CMD npm start 
