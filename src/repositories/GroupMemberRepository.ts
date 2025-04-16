@@ -177,6 +177,8 @@ class GroupMemberRepository {
       
       const sinceDate = new Date();
       sinceDate.setHours(sinceDate.getHours() - sinceHours);
+      
+      console.log(`Calculando métricas para grupo "${groupName}" con período de ${sinceHours} horas atrás (desde ${sinceDate.toISOString()})`);
 
       // Obtener todos los miembros del grupo en una sola llamada
       const membersResponse = await axios.get(`${STRAPI_URL}/api/group-members`, {
@@ -192,16 +194,42 @@ class GroupMemberRepository {
       
       // Filtrar miembros en memoria
       const currentMembers = allMembers.filter(member => member.isActive);
+      
+      // Miembros nuevos: aquellos que se unieron durante el período de tiempo especificado
       const newMembers = allMembers.filter(member => {
+        // Si no está activo o no tiene fecha de unión, no es un miembro nuevo
         if (!member.isActive || !member.joinDate) return false;
+        
         const joinDate = new Date(member.joinDate);
-        return joinDate >= sinceDate;
+        
+        // Ahora comparamos la fecha de unión con la fecha límite (sinceDate)
+        const isNew = joinDate >= sinceDate;
+        
+        if (isNew) {
+          console.log(`Miembro nuevo: ${member.name || member.phoneNumber}, se unió el ${joinDate.toISOString()}, dentro del rango de ${sinceHours} horas`);
+        }
+        
+        return isNew;
       });
+      
+      // Miembros que dejaron el grupo durante el período especificado
       const leftMembers = allMembers.filter(member => {
+        // Si está activo o no tiene fecha de salida, no ha dejado el grupo
         if (member.isActive || !member.leftDate) return false;
+        
         const leftDate = new Date(member.leftDate);
-        return leftDate >= sinceDate;
+        
+        // Comparamos la fecha de salida con la fecha límite
+        const leftRecently = leftDate >= sinceDate;
+        
+        if (leftRecently) {
+          console.log(`Miembro que salió: ${member.name || member.phoneNumber}, salió el ${leftDate.toISOString()}, dentro del rango de ${sinceHours} horas`);
+        }
+        
+        return leftRecently;
       });
+
+      console.log(`Métricas obtenidas para grupo "${groupName}": ${currentMembers.length} miembros, ${newMembers.length} nuevos, ${leftMembers.length} salieron`);
 
       return {
         groupName,

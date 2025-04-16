@@ -15,7 +15,8 @@
     "render-build": "npm run build",
     "render-start": "node build/index.js",
     "lint": "eslint . --ext .ts",
-    "init-db": "ts-node src/utils/initDb.ts"
+    "init-db": "ts-node src/utils/initDb.ts",
+    "auto-reconnect": "ts-node src/scripts/auto-reconnect.ts"
   },
   "keywords": [
     "express",

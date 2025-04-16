@@ -88,6 +88,10 @@ class SimpleWhatsAppService extends EventEmitter {
     axios.defaults.timeout = 60000; // Increase default timeout
   }
 
+  /**
+   * Obtiene la instancia singleton del servicio
+   * @returns La instancia del servicio
+   */
   public static getInstance(): SimpleWhatsAppService {
     if (!SimpleWhatsAppService.instance) {
       SimpleWhatsAppService.instance = new SimpleWhatsAppService();
@@ -97,8 +101,11 @@ class SimpleWhatsAppService extends EventEmitter {
 
   /**
    * Inicializa el cliente de WhatsApp Web
+   * @param cleanFailedSession Si es true, limpiará la sesión existente si falla la autenticación
+   * @param maxRetries Número máximo de intentos de reconexión
+   * @param retryDelayMs Tiempo entre intentos en milisegundos
    */
-  public async initialize(): Promise<void> {
+  public async initialize(cleanFailedSession: boolean = false, maxRetries: number = 3, retryDelayMs: number = 3000): Promise<void> {
     if (this.isInitializing) {
       console.log('Inicialización ya en progreso, esperando...');
       return;
@@ -111,6 +118,8 @@ class SimpleWhatsAppService extends EventEmitter {
     
     this.isInitializing = true;
     this.authError = null;
+    
+    let retryCount = 0;
     
     try {
       console.log(`[${this.clientId}] Inicializando WhatsApp con LocalAuth...`);
@@ -130,68 +139,103 @@ class SimpleWhatsAppService extends EventEmitter {
         }
       }
       
-      // Determinar si ejecutar en modo headless
-      const headless = process.env.BROWSER_HEADLESS !== 'false';
-      console.log(`[${this.clientId}] Configurado Puppeteer en modo headless: ${headless}`);
+      let initSuccess = false;
       
-      // Inicializar cliente con LocalAuth
-      this.client = new Client({
-        authStrategy: new LocalAuth({
-          clientId: this.clientId,
-          dataPath: this.clientPath
-        }),
-        puppeteer: {
-          headless: headless ? true : false, // Versión compatible con el tipo esperado boolean | "chrome"
-          args: [
-            '--no-sandbox', 
-            '--disable-extensions',
-            '--disable-gpu',
-            '--disable-dev-shm-usage',
-            '--disable-setuid-sandbox',
-            '--no-first-run',
-            '--no-zygote',
-            '--single-process', // <- this one doesn't works in Windows
-            '--disable-accelerated-2d-canvas',
-            '--disable-web-security',
-            '--disable-features=site-per-process',
-            '--allow-insecure-localhost',
-            '--window-size=1280,960',
-            '--disable-web-security',
-            '--disable-infobars',
-            '--ignore-certificate-errors',
-            '--ignore-certificate-errors-spki-list',
-            '--ignore-ssl-errors'
-          ],
-          executablePath: process.env.CHROMIUM_PATH || process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-          ignoreHTTPSErrors: true,
-          timeout: 90000, // Aumentar timeout para entornos más lentos
+      while (!initSuccess && retryCount < maxRetries) {
+        if (retryCount > 0) {
+          console.log(`Intento ${retryCount + 1}/${maxRetries} de inicialización...`);
+          await new Promise(resolve => setTimeout(resolve, retryDelayMs));
         }
-      });
-      
-      // Configurar eventos
-      this.setupEvents();
-      
-      // Inicializar cliente
-      console.log('Iniciando cliente WhatsApp...');
-      await this.client.initialize();
-      
-      // Esperar un momento para asegurar que el cliente está correctamente inicializado
-      await new Promise(resolve => setTimeout(resolve, 3000));
-      
-      // Verificar que el cliente está disponible y cuenta con pupPage
-      if (!this.client || !this.client.pupPage) {
-        throw new Error('El cliente no se inicializó correctamente o la página de Puppeteer no está disponible');
+        
+        try {
+          // Determinar si ejecutar en modo headless
+          const headless = process.env.BROWSER_HEADLESS !== 'false';
+          console.log(`[${this.clientId}] Configurado Puppeteer en modo headless: ${headless}`);
+          
+          // Inicializar cliente con LocalAuth
+          this.client = new Client({
+            authStrategy: new LocalAuth({
+              clientId: this.clientId,
+              dataPath: this.clientPath
+            }),
+            puppeteer: {
+              headless: headless ? true : false, // Versión compatible con el tipo esperado boolean | "chrome"
+              args: [
+                '--no-sandbox', 
+                '--disable-extensions',
+                '--disable-gpu',
+                '--disable-dev-shm-usage',
+                '--disable-setuid-sandbox',
+                '--no-first-run',
+                '--no-zygote',
+                '--single-process', // <- this one doesn't works in Windows
+                '--disable-accelerated-2d-canvas',
+                '--disable-web-security',
+                '--disable-features=site-per-process',
+                '--allow-insecure-localhost',
+                '--window-size=1280,960',
+                '--disable-web-security',
+                '--disable-infobars',
+                '--ignore-certificate-errors',
+                '--ignore-certificate-errors-spki-list',
+                '--ignore-ssl-errors'
+              ],
+              executablePath: process.env.CHROMIUM_PATH || process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+              ignoreHTTPSErrors: true,
+              timeout: 90000, // Aumentar timeout para entornos más lentos
+            }
+          });
+          
+          // Configurar eventos
+          this.setupEvents();
+          
+          // Inicializar cliente
+          console.log('Iniciando cliente WhatsApp...');
+          await this.client.initialize();
+          
+          // Esperar un momento para asegurar que el cliente está correctamente inicializado
+          await new Promise(resolve => setTimeout(resolve, 3000));
+          
+          // Verificar que el cliente está disponible y cuenta con pupPage
+          if (!this.client || !this.client.pupPage) {
+            throw new Error('El cliente no se inicializó correctamente o la página de Puppeteer no está disponible');
+          }
+          
+          console.log('Cliente WhatsApp inicializado con LocalAuth');
+          initSuccess = true;
+          
+        } catch (initError) {
+          console.error(`Error en intento ${retryCount + 1}/${maxRetries} de inicialización:`, initError);
+          
+          // Destruir el cliente si falló pero se creó
+          if (this.client) {
+            try {
+              await this.client.destroy().catch(e => console.error('Error destruyendo cliente fallido:', e));
+            } catch (destroyError) {
+              console.error('Error al destruir cliente después de fallo de inicialización:', destroyError);
+            }
+            this.client = null;
+          }
+          
+          retryCount++;
+          
+          // Si es el último intento, propagar el error
+          if (retryCount >= maxRetries) {
+            throw initError;
+          }
+        }
       }
-      
-      console.log('Cliente WhatsApp inicializado con LocalAuth');
       
       // Si el cliente no emitió un evento de autenticación en unos segundos, verificar el estado
       setTimeout(() => {
-        if (!this.isAuthenticated && this.client) {
-          console.log('Verificando estado de autenticación después de inicialización...');
-          // Solo para diagnóstico - no cambiar el estado
+        // Si ha fallado la autenticación y se solicitó limpiar en caso de fallo
+        if (this.authError && cleanFailedSession) {
+          console.log('La autenticación falló y se solicitó limpiar la sesión. Limpiando...');
+          this.cleanLocalSession().catch(err => {
+            console.error('Error al limpiar sesión después de fallo:', err);
+          });
         }
-      }, 5000);
+      }, 8000); // Dar tiempo suficiente para que ocurran eventos de autenticación
       
     } catch (error) {
       console.error('Error al inicializar cliente WhatsApp:', error);
@@ -892,23 +936,65 @@ class SimpleWhatsAppService extends EventEmitter {
 
   /**
    * Cierra el cliente y libera recursos
+   * Si preserveSession es true, no limpia los archivos de sesión local
    */
-  public async close(): Promise<void> {
+  public async close(preserveSession: boolean = false): Promise<void> {
     // Cancelar cierre automático si está activo
     this.cancelAutoClose();
     
     console.log(`[${this.clientId}] Iniciando cierre de cliente WhatsApp`);
     
     try {
-      // Primero intentar un logout ordenado
-      await this.logout()
-        .catch(error => {
-          console.error(`[${this.clientId}] Error al hacer logout durante cierre:`, error);
-        });
+      if (preserveSession) {
+        // Cierre suave - mantiene archivos de sesión
+        await this.softClose();
+      } else {
+        // Cierre completo con logout - elimina archivos de sesión
+        await this.logout()
+          .catch(error => {
+            console.error(`[${this.clientId}] Error al hacer logout durante cierre:`, error);
+          });
+      }
       
       console.log(`[${this.clientId}] Cierre de cliente completado con éxito`);
     } catch (error) {
       console.error(`[${this.clientId}] Error fatal durante cierre de cliente:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Cierra suavemente el cliente liberando recursos pero conservando sesión
+   */
+  public async softClose(): Promise<void> {
+    console.log(`[${this.clientId}] Iniciando cierre suave (preservando sesión)...`);
+    
+    try {
+      if (this.client) {
+        try {
+          // No hacer logout, solo destruir el cliente para liberar recursos
+          console.log(`[${this.clientId}] Destruyendo cliente (sin logout)...`);
+          await this.client.destroy()
+            .catch(e => console.error(`[${this.clientId}] Error en client.destroy():`, e));
+        } catch (destroyError) {
+          console.error(`[${this.clientId}] Error durante destroy:`, destroyError);
+        }
+        
+        // Limpiar la referencia del cliente
+        this.client = null;
+      }
+      
+      // Restablecer estado pero mantener la información de autenticación
+      // para que la próxima conexión intente usar la sesión guardada
+      this.isAuthenticated = false;
+      this.qrCode = null;
+      
+      // Emitir evento de cierre suave
+      this.emit('softClose', this.clientId);
+      
+      console.log(`[${this.clientId}] Cierre suave completado con éxito (sesión preservada)`);
+    } catch (error) {
+      console.error(`[${this.clientId}] Error durante cierre suave:`, error);
       throw error;
     }
   }
@@ -919,16 +1005,23 @@ class SimpleWhatsAppService extends EventEmitter {
   private scheduleAutoClose(): void {
     this.cancelAutoClose();
     
-    const autoCloseAfterScan = process.env.AUTO_CLOSE_AFTER_SCAN === 'true';
+    // Configurar cierre automático basado en variables de entorno
+    const autoCloseAfterScan = process.env.AUTO_CLOSE_AFTER_SCAN !== 'false'; // Activado por defecto
     
     if (autoCloseAfterScan) {
-      const timeout = parseInt(process.env.AUTO_CLOSE_TIMEOUT || '180000', 10); // 3 minutos por defecto
-      console.log(`Programando cierre automático en ${timeout/60000} minutos...`);
+      // Usar un timeout razonable (10 minutos) por defecto
+      const timeout = parseInt(process.env.AUTO_CLOSE_TIMEOUT || '600000', 10); // 10 minutos por defecto
+      console.log(`ℹ️ Programando cierre automático en ${timeout/60000} minutos...`);
+      console.log(`   (Las sesiones se conservarán para reconexiones futuras)`);
       
       this.autoCloseTimeout = setTimeout(() => {
-        console.log('Cerrando cliente automáticamente por inactividad...');
-        this.close();
+        console.log('ℹ️ Cerrando cliente automáticamente por inactividad...');
+        console.log('   Las sesiones se conservarán para reconexiones futuras');
+        // Usar close con preserveSession=true para mantener los archivos de sesión
+        this.close(true);
       }, timeout);
+    } else {
+      console.log('ℹ️ Cierre automático desactivado (AUTO_CLOSE_AFTER_SCAN=false)');
     }
   }
 
@@ -961,6 +1054,7 @@ class SimpleWhatsAppService extends EventEmitter {
       console.log('Cliente autenticado correctamente');
       this.isAuthenticated = true;
       this.qrCode = null;
+      this.authError = null; // Limpiar error si hay autenticación exitosa
       this.emit('authenticated');
     });
     
@@ -974,6 +1068,7 @@ class SimpleWhatsAppService extends EventEmitter {
     this.client.on('ready', () => {
       console.log('Cliente listo para usar');
       this.isAuthenticated = true;
+      this.authError = null; // Limpiar error si está listo
       this.emit('ready');
     });
     
@@ -1217,6 +1312,16 @@ class SimpleWhatsAppService extends EventEmitter {
       percent
     };
   }
+
+  /**
+   * Obtiene el error de autenticación si existe
+   * @returns El mensaje de error o null si no hay error
+   */
+  public getAuthError(): string | null {
+    return this.authError;
+  }
 }
 
-export default SimpleWhatsAppService.getInstance();
+// Exportar instancia singleton
+const instance = SimpleWhatsAppService.getInstance();
+export default instance;

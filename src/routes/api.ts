@@ -5,6 +5,7 @@ const router = express.Router();
 
 // Rutas de WhatsApp
 router.get('/whatsapp/status', SimpleWhatsAppController.getStatus);
+router.get('/whatsapp/api-status', SimpleWhatsAppController.getApiStatus);
 router.get('/whatsapp/qr', SimpleWhatsAppController.generateQR);
 router.post('/whatsapp/scan', SimpleWhatsAppController.scanGroups);
 router.get('/whatsapp/scan/status', SimpleWhatsAppController.checkScanStatus);
