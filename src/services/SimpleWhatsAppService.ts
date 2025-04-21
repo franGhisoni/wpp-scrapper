@@ -33,6 +33,7 @@ class SimpleWhatsAppService extends EventEmitter {
   private clientId: string = 'whatsapp-api';
   private clientPath: string = './.wwebjs_auth';
   private autoCloseTimeout: NodeJS.Timeout | null = null;
+  private authTimeoutTimer: NodeJS.Timeout | null = null; // Timer para cerrar si no hay autenticación
   private previousMembers: Record<string, GroupMember[]> = {};
   private scanning: boolean = false;
   private scanProgressData: {
@@ -118,6 +119,12 @@ class SimpleWhatsAppService extends EventEmitter {
     
     this.isInitializing = true;
     this.authError = null;
+    
+    // Limpiar cualquier temporizador de autenticación existente
+    this.clearAuthTimeout();
+    
+    // Configurar el temporizador de autenticación (5 minutos)
+    this.setAuthTimeout();
     
     let retryCount = 0;
     
@@ -1055,6 +1062,10 @@ class SimpleWhatsAppService extends EventEmitter {
       this.isAuthenticated = true;
       this.qrCode = null;
       this.authError = null; // Limpiar error si hay autenticación exitosa
+      
+      // Limpiar el temporizador de autenticación ya que nos autenticamos exitosamente
+      this.clearAuthTimeout();
+      
       this.emit('authenticated');
     });
     
@@ -1319,6 +1330,39 @@ class SimpleWhatsAppService extends EventEmitter {
    */
   public getAuthError(): string | null {
     return this.authError;
+  }
+
+  /**
+   * Configura un temporizador para cerrar el cliente si no se autentica en 5 minutos
+   */
+  private setAuthTimeout(): void {
+    // Limpiar cualquier temporizador existente primero
+    this.clearAuthTimeout();
+    
+    console.log('⏱️ Configurando temporizador de autenticación: 5 minutos');
+    
+    // Crear nuevo temporizador (5 minutos = 300000 ms)
+    this.authTimeoutTimer = setTimeout(() => {
+      console.log('⚠️ Temporizador de autenticación expirado (5 minutos)');
+      
+      if (!this.isAuthenticated) {
+        console.log('🔒 No se autenticó en 5 minutos, cerrando cliente para liberar recursos...');
+        this.close(true)
+          .then(() => console.log('Cliente cerrado exitosamente por timeout de autenticación'))
+          .catch(error => console.error('Error al cerrar cliente por timeout:', error));
+      }
+    }, 5 * 60 * 1000); // 5 minutos
+  }
+  
+  /**
+   * Limpia el temporizador de autenticación
+   */
+  private clearAuthTimeout(): void {
+    if (this.authTimeoutTimer) {
+      clearTimeout(this.authTimeoutTimer);
+      this.authTimeoutTimer = null;
+      console.log('Temporizador de autenticación cancelado');
+    }
   }
 }
 

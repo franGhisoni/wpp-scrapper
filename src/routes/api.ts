@@ -7,10 +7,12 @@ const router = express.Router();
 router.get('/whatsapp/status', SimpleWhatsAppController.getStatus);
 router.get('/whatsapp/api-status', SimpleWhatsAppController.getApiStatus);
 router.get('/whatsapp/qr', SimpleWhatsAppController.generateQR);
+router.get('/whatsapp/qr-image', SimpleWhatsAppController.generateQRImage);
 router.post('/whatsapp/scan', SimpleWhatsAppController.scanGroups);
 router.get('/whatsapp/scan/status', SimpleWhatsAppController.checkScanStatus);
 router.post('/whatsapp/metrics', SimpleWhatsAppController.getGroupsMetrics);
 router.post('/whatsapp/logout', SimpleWhatsAppController.logout);
+router.post('/whatsapp/cleanup', SimpleWhatsAppController.cleanup);
 
 // Mantener endpoint individual para compatibilidad
 router.get('/whatsapp/group/:groupName', SimpleWhatsAppController.getGroupInfo);

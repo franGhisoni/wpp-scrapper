@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import SimpleWhatsAppService from '../services/SimpleWhatsAppService';
 import fs from 'fs';
+import qrcode from 'qrcode';
 
 /**
  * Controlador simplificado para WhatsApp
@@ -46,10 +47,25 @@ class SimpleWhatsAppController {
       const existingQR = SimpleWhatsAppService.getQRCode();
       if (existingQR) {
         console.log('QR existente encontrado en generateQR');
-        res.json({
-          status: 'NEED_SCAN',
-          qr: existingQR
-        });
+        
+        // Convertir el QR string a imagen base64
+        try {
+          const qrBase64 = await qrcode.toDataURL(existingQR);
+          
+          res.json({
+            status: 'NEED_SCAN',
+            qr: existingQR,
+            qrImage: qrBase64 // Incluir la imagen en base64
+          });
+        } catch (qrError) {
+          console.error('Error generando imagen QR:', qrError);
+          
+          // Enviar solo el string QR si hay error en la conversión
+          res.json({
+            status: 'NEED_SCAN',
+            qr: existingQR
+          });
+        }
         return;
       }
       
@@ -169,10 +185,25 @@ class SimpleWhatsAppController {
       
       if (qr) {
         console.log('QR recibido, enviando respuesta');
-        res.json({
-          status: 'NEED_SCAN',
-          qr
-        });
+        
+        // Convertir el QR string a imagen base64
+        try {
+          const qrBase64 = await qrcode.toDataURL(qr);
+          
+          res.json({
+            status: 'NEED_SCAN',
+            qr: qr,
+            qrImage: qrBase64 // Incluir la imagen en base64
+          });
+        } catch (qrError) {
+          console.error('Error generando imagen QR:', qrError);
+          
+          // Enviar solo el string QR si hay error en la conversión
+          res.json({
+            status: 'NEED_SCAN',
+            qr: qr
+          });
+        }
       } else if (SimpleWhatsAppService.isClientAuthenticated()) {
         console.log('Cliente autenticado después de esperar QR');
         res.json({
@@ -204,6 +235,74 @@ class SimpleWhatsAppController {
       res.status(500).json({
         status: 'ERROR',
         message: 'Error generando código QR',
+        error: error.message || 'Error desconocido'
+      });
+    }
+  }
+
+  /**
+   * Genera una imagen QR para escanear directamente
+   */
+  async generateQRImage(req: Request, res: Response): Promise<void> {
+    try {
+      // Verificar si ya está autenticado
+      if (SimpleWhatsAppService.isClientAuthenticated()) {
+        res.status(400).json({
+          status: 'AUTHENTICATED',
+          message: 'Cliente ya autenticado, no se requiere QR'
+        });
+        return;
+      }
+      
+      // Verificar si ya existe un QR
+      const existingQR = SimpleWhatsAppService.getQRCode();
+      if (!existingQR) {
+        // Si no hay QR disponible, iniciar proceso para obtenerlo
+        console.log('No hay QR disponible, inicializando cliente...');
+        await SimpleWhatsAppService.initialize();
+        
+        // Esperar hasta 10 segundos para que se genere el QR
+        let attempts = 0;
+        let qrCode = null;
+        while (!qrCode && attempts < 10) {
+          qrCode = SimpleWhatsAppService.getQRCode();
+          if (!qrCode) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            attempts++;
+          }
+        }
+        
+        if (!qrCode) {
+          res.status(500).json({
+            status: 'ERROR',
+            message: 'No se pudo generar código QR en el tiempo esperado'
+          });
+          return;
+        }
+      }
+      
+      const qrCodeString = SimpleWhatsAppService.getQRCode();
+      
+      // Configurar la respuesta como imagen PNG
+      res.setHeader('Content-Type', 'image/png');
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      
+      // Generar la imagen QR directamente en la respuesta
+      qrcode.toFileStream(res, qrCodeString!, {
+        type: 'png',
+        width: 300,
+        margin: 2,
+        color: {
+          dark: '#000000',
+          light: '#ffffff'
+        }
+      });
+      
+    } catch (error: any) {
+      console.error('Error generando imagen QR:', error);
+      res.status(500).json({
+        status: 'ERROR',
+        message: 'Error generando imagen QR',
         error: error.message || 'Error desconocido'
       });
     }
@@ -321,6 +420,47 @@ class SimpleWhatsAppController {
         message: 'Sesión cerrada correctamente'
       });
     } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: error instanceof Error ? error.message : 'Error desconocido'
+      });
+    }
+  }
+
+  /**
+   * Limpia recursos y reinicia el sistema
+   * Esta función es útil cuando el sistema está en un estado inconsistente
+   */
+  async cleanup(req: Request, res: Response): Promise<void> {
+    try {
+      console.log('Iniciando limpieza de recursos...');
+      
+      // Forzar cierre con forceClean = true para eliminar archivos si es necesario
+      const forceClean = req.query.force === 'true';
+      
+      if (forceClean) {
+        console.log('Limpieza forzada solicitada, se eliminarán archivos de sesión');
+        // Cerrar cliente y eliminar archivos de sesión
+        await SimpleWhatsAppService.close(false);
+        
+        // Limpiar sesión localmente
+        await SimpleWhatsAppService.cleanLocalSession();
+        
+        res.status(200).json({
+          success: true,
+          message: 'Recursos liberados y sesión eliminada correctamente'
+        });
+      } else {
+        // Solo cierre suave, conservando sesión
+        await SimpleWhatsAppService.close(true);
+        
+        res.status(200).json({
+          success: true,
+          message: 'Recursos liberados correctamente (sesión preservada)'
+        });
+      }
+    } catch (error) {
+      console.error('Error durante la limpieza de recursos:', error);
       res.status(500).json({
         success: false,
         message: error instanceof Error ? error.message : 'Error desconocido'
