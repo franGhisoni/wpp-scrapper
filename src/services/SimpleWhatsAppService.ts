@@ -65,10 +65,9 @@ class SimpleWhatsAppService extends EventEmitter {
     console.log('📁 Ruta de sesión:', this.clientPath);
     
     // En Render, usar el directorio de datos persistente si está disponible
-    if (process.env.RENDER === 'true') {
+    if (process.env.RENDER) {
       this.clientPath = process.env.RENDER_DATA_PATH || './.wwebjs_auth';
       console.log('📁 Usando ruta de datos persistente de Render:', this.clientPath);
-      console.log('🖥️ Modo Render detectado - optimizando para recursos limitados');
     }
     
     // Configure axios for IPv4
@@ -157,50 +156,7 @@ class SimpleWhatsAppService extends EventEmitter {
           const headless = process.env.BROWSER_HEADLESS !== 'false';
           console.log(`[${this.clientId}] Configurado Puppeteer en modo headless: ${headless}`);
           
-          // Configuración optimizada para entornos con recursos limitados como Render
-          const isRender = process.env.RENDER === 'true';
-          
-          // Argumentos optimizados basados en recomendaciones de la comunidad y problemas conocidos
-          const baseArgs = [
-            '--log-level=3', // Solo mensajes fatales
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage', // Crucial para entornos con memoria compartida limitada
-            '--disable-accelerated-2d-canvas',
-            '--no-first-run',
-            '--no-experiments',
-            '--disable-infobars',
-            '--disable-extensions',
-            '--disable-default-apps',
-            '--disable-web-security',
-            '--ignore-certificate-errors',
-            '--ignore-certificate-errors-spki-list',
-            '--disable-gpu'
-          ];
-          
-          // Args adicionales específicos para entornos con recursos muy limitados como Render
-          const renderArgs = [
-            '--js-flags=--expose-gc,--max-old-space-size=512',
-            '--disable-features=AudioServiceOutOfProcess,IsolateOrigins,site-per-process',
-            '--disable-site-isolation-trials',
-            '--mute-audio',
-            '--disable-background-timer-throttling',
-            '--disable-backgrounding-occluded-windows',
-            '--disable-breakpad',
-            '--disable-component-update',
-            '--disable-sync',
-            '--no-pings',
-            '--disable-speech-api',
-            '--disable-blink-features=AutomationControlled'
-          ];
-          
-          // Crear lista final de argumentos
-          const args = isRender ? [...baseArgs, ...renderArgs] : baseArgs;
-          
-          console.log(`[${this.clientId}] Modo Render: ${isRender ? 'Activado' : 'Desactivado'}`);
-          console.log(`[${this.clientId}] Aplicando ${args.length} flags de optimización para Chrome`);
-          
-          // Inicializar cliente con LocalAuth y configuración optimizada
+          // Inicializar cliente con LocalAuth
           this.client = new Client({
             authStrategy: new LocalAuth({
               clientId: this.clientId,
@@ -208,14 +164,29 @@ class SimpleWhatsAppService extends EventEmitter {
             }),
             puppeteer: {
               headless: headless ? true : false,
-              args: args,
+              args: [
+                '--no-sandbox', 
+                '--disable-extensions',
+                '--disable-gpu',
+                '--disable-dev-shm-usage',
+                '--disable-setuid-sandbox',
+                '--no-first-run',
+                '--no-zygote',
+                '--single-process',
+                '--disable-accelerated-2d-canvas',
+                '--disable-web-security',
+                '--disable-features=site-per-process',
+                '--allow-insecure-localhost',
+                '--window-size=1280,960',
+                '--disable-web-security',
+                '--disable-infobars',
+                '--ignore-certificate-errors',
+                '--ignore-certificate-errors-spki-list',
+                '--ignore-ssl-errors'
+              ],
               executablePath: process.env.CHROMIUM_PATH || process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
               ignoreHTTPSErrors: true,
-              timeout: isRender ? 180000 : 120000, // 3 minutos en Render, 2 en otros entornos
-              defaultViewport: {
-                width: 800,
-                height: 600
-              }
+              timeout: 120000, // Aumentado a 2 minutos
             }
           });
           
@@ -224,13 +195,6 @@ class SimpleWhatsAppService extends EventEmitter {
           
           // Inicializar cliente
           console.log('Iniciando cliente WhatsApp...');
-          
-          // Liberar memoria antes de inicializar si estamos en Render
-          if (isRender) {
-            console.log('🧹 Limpiando memoria antes de inicializar...');
-            global.gc && global.gc();
-          }
-          
           await this.client.initialize();
           
           // Esperar un momento para asegurar que el cliente está correctamente inicializado
