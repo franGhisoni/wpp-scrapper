@@ -100,7 +100,7 @@ class SimpleWhatsAppService extends EventEmitter {
    * @param maxRetries Número máximo de intentos de reconexión
    * @param retryDelayMs Tiempo entre intentos en milisegundos
    */
-  public async initialize(cleanFailedSession: boolean = false, maxRetries: number = 3, retryDelayMs: number = 3000): Promise<void> {
+  public async initialize(cleanFailedSession: boolean = false, maxRetries: number = 3, retryDelayMs: number = 5000): Promise<void> {
     if (this.isInitializing) {
       console.log('Inicialización ya en progreso, esperando...');
       return;
@@ -117,7 +117,7 @@ class SimpleWhatsAppService extends EventEmitter {
     // Limpiar cualquier temporizador de autenticación existente
     this.clearAuthTimeout();
     
-    // Configurar el temporizador de autenticación (5 minutos)
+    // Configurar el temporizador de autenticación (reducido a 2 minutos)
     this.setAuthTimeout();
     
     let retryCount = 0;
@@ -134,6 +134,8 @@ class SimpleWhatsAppService extends EventEmitter {
           console.log('Destruyendo cliente anterior antes de crear uno nuevo...');
           await this.client.destroy().catch(e => console.error('Error destruyendo cliente anterior:', e));
           this.client = null;
+          // Esperar un momento después de destruir el cliente
+          await new Promise(resolve => setTimeout(resolve, 2000));
         } catch (error) {
           console.error('Error al destruir cliente anterior:', error);
           // Continuar a pesar del error
@@ -145,7 +147,8 @@ class SimpleWhatsAppService extends EventEmitter {
       while (!initSuccess && retryCount < maxRetries) {
         if (retryCount > 0) {
           console.log(`Intento ${retryCount + 1}/${maxRetries} de inicialización...`);
-          await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+          // Aumentar el tiempo de espera entre reintentos
+          await new Promise(resolve => setTimeout(resolve, retryDelayMs * (retryCount + 1)));
         }
         
         try {
@@ -183,7 +186,7 @@ class SimpleWhatsAppService extends EventEmitter {
               ],
               executablePath: process.env.CHROMIUM_PATH || process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
               ignoreHTTPSErrors: true,
-              timeout: 90000,
+              timeout: 60000, // Reducido a 1 minuto
             }
           });
           
@@ -195,11 +198,25 @@ class SimpleWhatsAppService extends EventEmitter {
           await this.client.initialize();
           
           // Esperar un momento para asegurar que el cliente está correctamente inicializado
-          await new Promise(resolve => setTimeout(resolve, 3000));
+          await new Promise(resolve => setTimeout(resolve, 5000));
           
           // Verificar que el cliente está disponible y cuenta con pupPage
           if (!this.client || !this.client.pupPage) {
             throw new Error('El cliente no se inicializó correctamente o la página de Puppeteer no está disponible');
+          }
+          
+          // Si tenemos una sesión existente, esperar a ver si se autentica automáticamente
+          const sessionExists = fs.existsSync(`${this.clientPath}/session-${this.clientId}`);
+          if (sessionExists) {
+            console.log('Sesión existente detectada, esperando autenticación automática...');
+            // Esperar hasta 30 segundos para ver si se autentica automáticamente
+            for (let i = 0; i < 30; i++) {
+              if (this.isAuthenticated) {
+                console.log('Autenticación automática exitosa');
+                break;
+              }
+              await new Promise(resolve => setTimeout(resolve, 1000));
+            }
           }
           
           console.log('Cliente WhatsApp inicializado con LocalAuth');
@@ -565,7 +582,7 @@ class SimpleWhatsAppService extends EventEmitter {
           {
             params: {
               'filters[name][$eq]': groupName,
-              'sort': 'createdAt:desc', // Ordenar por fecha de creación, más reciente primero
+              'sort': 'createdAt:desc',
             },
             headers: {
               'Authorization': `Bearer ${SimpleWhatsAppService.strapiApiToken}`,
@@ -576,8 +593,6 @@ class SimpleWhatsAppService extends EventEmitter {
         );
         
         if (existingGroups.status === 200 && existingGroups.data?.data?.length > 0) {
-          // Si hay múltiples grupos con el mismo nombre, usar el más reciente
-          // y registrar los otros como posibles duplicados
           const groups = existingGroups.data.data;
           if (groups.length > 1) {
             console.log(`⚠️ ADVERTENCIA: Se encontraron ${groups.length} grupos con el nombre "${groupName}". Posibles duplicados.`);
@@ -586,7 +601,6 @@ class SimpleWhatsAppService extends EventEmitter {
             });
           }
           
-          // Usar el primer grupo (más reciente si están ordenados)
           groupId = groups[0].id;
           console.log(`Usando grupo "${groupName}" con ID: ${groupId}.`);
           
@@ -623,7 +637,8 @@ class SimpleWhatsAppService extends EventEmitter {
               data: {
                 name: groupName,
                 lastScan: timestamp,
-                memberCount: members.length
+                memberCount: members.length,
+                status: 'draft'
               }
             },
             {
@@ -658,7 +673,7 @@ class SimpleWhatsAppService extends EventEmitter {
         throw new Error(`No se pudo obtener ID del grupo "${groupName}"`);
       }
       
-      // Obtener todos los miembros existentes para este grupo para optimizar búsquedas
+      // Obtener todos los miembros existentes para este grupo
       console.log(`Obteniendo miembros existentes para grupo "${groupName}" (ID: ${groupId})...`);
       let existingGroupMembers: any[] = [];
       
@@ -668,7 +683,7 @@ class SimpleWhatsAppService extends EventEmitter {
           {
             params: {
               'filters[whats_app_group][id][$eq]': groupId,
-              'pagination[pageSize]': 500, // Aumentar para asegurar obtener todos los miembros
+              'pagination[pageSize]': 500,
             },
             headers: {
               'Authorization': `Bearer ${SimpleWhatsAppService.strapiApiToken}`,
@@ -701,15 +716,14 @@ class SimpleWhatsAppService extends EventEmitter {
         });
       }
       
-      // Preparar lista de números de teléfono actuales para detectar miembros que se fueron
+      // Preparar lista de números de teléfono actuales
       const currentPhoneNumbers = new Set(members.map(m => m.phoneNumber));
       
-      // Marcar los miembros que ya no están en el grupo con leftDate
+      // Marcar los miembros que ya no están en el grupo
       const updateLeftMembersPromises = [];
       
       for (const existingMember of existingGroupMembers) {
         const phoneNumber = existingMember.attributes.phone_number;
-        // Si el miembro no está en la lista actual y no tiene fecha de salida
         if (!currentPhoneNumbers.has(phoneNumber) && !existingMember.attributes.Left_date) {
           console.log(`Miembro ${phoneNumber} ya no está en el grupo, actualizando left_date`);
           updateLeftMembersPromises.push(
@@ -738,7 +752,7 @@ class SimpleWhatsAppService extends EventEmitter {
       // Esperar a que terminen todas las actualizaciones de left_date
       await Promise.all(updateLeftMembersPromises);
       
-      // Guardar los miembros (en pequeños lotes para evitar problemas)
+      // Guardar los miembros (en pequeños lotes)
       const batchSize = 50;
       for (let i = 0; i < members.length; i += batchSize) {
         const batch = members.slice(i, i + batchSize);
@@ -748,7 +762,6 @@ class SimpleWhatsAppService extends EventEmitter {
             const existingMemberInfo = memberMap.get(member.phoneNumber);
             
             if (existingMemberInfo) {
-              // Verificar si realmente necesita actualizarse (si estaba inactivo o tenía fecha de salida)
               const needsUpdate = existingMemberInfo.is_active === false || 
                                  (existingMemberInfo.left_date !== null && existingMemberInfo.left_date !== undefined);
               
@@ -781,8 +794,7 @@ class SimpleWhatsAppService extends EventEmitter {
                 console.log(`Miembro ${member.phoneNumber} ya está activo en grupo "${groupName}", no requiere actualización`);
               }
             } else {
-              // Verificar explícitamente si este miembro ya existe en este grupo
-              // usando los parámetros phone_number + whats_app_group
+              // Verificar si ya existe en este grupo
               console.log(`Verificando si ya existe miembro ${member.phoneNumber} en grupo ${groupName} (ID: ${groupId})...`);
               
               const existingMembersInGroup = await axios.get(
@@ -801,7 +813,6 @@ class SimpleWhatsAppService extends EventEmitter {
               );
               
               if (existingMembersInGroup.status === 200 && existingMembersInGroup.data?.data?.length > 0) {
-                // Ya existe en este grupo, actualizar solo si es necesario
                 const existingMember = existingMembersInGroup.data.data[0];
                 const isActive = existingMember.attributes.is_active === true;
                 const hasLeftDate = existingMember.attributes.Left_date !== null && 
@@ -840,13 +851,10 @@ class SimpleWhatsAppService extends EventEmitter {
                   console.log(`Miembro ${member.phoneNumber} ya está activo en este grupo, no requiere actualización`);
                 }
               } else {
-                // Es un miembro completamente nuevo para este grupo, crearlo
+                // Es un miembro completamente nuevo
                 console.log(`Creando nuevo miembro ${member.phoneNumber} para grupo ${groupName} (ID: ${groupId})`);
                 
-                // Asegurar que join_date siempre sea una fecha válida con formato ISO
                 let joinDate = timestamp;
-                
-                // Si member.joinDate es un objeto Date válido, convertirlo a ISO string
                 if (member.joinDate instanceof Date && !isNaN(member.joinDate.getTime())) {
                   joinDate = member.joinDate.toISOString();
                   console.log(`Usando join_date de objeto Date: ${joinDate} para miembro ${member.phoneNumber}`);
@@ -863,7 +871,8 @@ class SimpleWhatsAppService extends EventEmitter {
                       is_active: true,
                       Join_date: joinDate,
                       left_date: null,
-                      whats_app_group: groupId
+                      whats_app_group: groupId,
+                      status: 'draft'
                     }
                   },
                   {
@@ -1054,11 +1063,8 @@ class SimpleWhatsAppService extends EventEmitter {
       console.log('Cliente autenticado correctamente');
       this.isAuthenticated = true;
       this.qrCode = null;
-      this.authError = null; // Limpiar error si hay autenticación exitosa
-      
-      // Limpiar el temporizador de autenticación ya que nos autenticamos exitosamente
+      this.authError = null;
       this.clearAuthTimeout();
-      
       this.emit('authenticated');
     });
     
@@ -1072,18 +1078,27 @@ class SimpleWhatsAppService extends EventEmitter {
     this.client.on('ready', () => {
       console.log('Cliente listo para usar');
       this.isAuthenticated = true;
-      this.authError = null; // Limpiar error si está listo
+      this.authError = null;
       this.emit('ready');
     });
     
-    this.client.on('disconnected', () => {
-      console.log('Cliente desconectado');
+    this.client.on('disconnected', (reason) => {
+      console.log('Cliente desconectado:', reason);
       this.isAuthenticated = false;
-      this.emit('disconnected');
+      this.emit('disconnected', reason);
     });
     
-    this.client.on('remote_session_saved', () => {
-      console.log('[SimpleWhatsAppService] Evento remote_session_saved recibido! La librería cree que guardó la sesión.');
+    // Añadir evento para detectar cuando la sesión no es válida
+    this.client.on('loading_screen', () => {
+      console.log('Pantalla de carga detectada - verificando estado de sesión...');
+      // Si después de 10 segundos no estamos autenticados, asumimos que necesitamos QR
+      setTimeout(() => {
+        if (!this.isAuthenticated) {
+          console.log('Sesión no válida detectada - se requerirá nuevo QR');
+          this.isAuthenticated = false;
+          this.emit('session_invalid');
+        }
+      }, 10000);
     });
   }
 
@@ -1118,58 +1133,65 @@ class SimpleWhatsAppService extends EventEmitter {
       return;
     }
     
-    // Esperar para asegurar que los archivos no estén en uso
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    const maxRetries = 3;
+    const retryDelay = 2000; // 2 segundos
     
-    try {
-      // Usar fs.promises.rm que es asíncrono y maneja recursividad
-      console.log(`Intentando eliminar directorio ${dirPath} con fs.promises.rm...`);
-      await fs.promises.rm(dirPath, { recursive: true, force: true });
-      return;
-    } catch (error: any) {
-      console.error(`[${this.clientId}] Error al eliminar directorio con fs.promises.rm:`, error);
-      
-      // Si falla por archivos bloqueados, esperar y continuar sin error
-      if (error && error.code && ['EBUSY', 'EPERM', 'EACCES'].includes(error.code)) {
-        console.log(`[${this.clientId}] Archivos bloqueados en ${dirPath}, se ignorará y continuará...`);
-        return;
-      }
-      
-      // Fallback: usar comandos del sistema según la plataforma
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        if (process.platform === 'win32') {
-          // En Windows, usar rd /s /q
-          console.log(`Intentando eliminar ${dirPath} con comando 'rd'...`);
-          await new Promise((resolve, reject) => {
-            exec(`rd /s /q "${dirPath}"`, (error, stdout, stderr) => {
-              if (error) {
-                console.error(`[${this.clientId}] Error en comando rd:`, stderr);
-                // No rechazar para continuar a pesar de errores
-                resolve(null);
-                return;
-              }
-              resolve(stdout);
-            });
-          });
-        } else {
-          // En Unix/Linux/Mac, usar rm -rf
-          console.log(`Intentando eliminar ${dirPath} con comando 'rm -rf'...`);
-          await new Promise((resolve, reject) => {
-            exec(`rm -rf "${dirPath}"`, (error, stdout, stderr) => {
-              if (error) {
-                console.error(`[${this.clientId}] Error en comando rm:`, stderr);
-                // No rechazar para continuar a pesar de errores
-                resolve(null);
-                return;
-              }
-              resolve(stdout);
-            });
-          });
+        // Esperar antes de cada intento
+        if (attempt > 1) {
+          console.log(`Intento ${attempt}/${maxRetries} de eliminar directorio ${dirPath}...`);
+          await new Promise(resolve => setTimeout(resolve, retryDelay));
         }
-      } catch (cmdError) {
-        console.error(`[${this.clientId}] Error al eliminar directorio con comando del sistema:`, cmdError);
-        // No lanzar error para permitir continuar
-        console.log(`[${this.clientId}] Se ignorará el error y continuará...`);
+        
+        // Intentar eliminar con fs.promises.rm
+        await fs.promises.rm(dirPath, { 
+          recursive: true, 
+          force: true,
+          maxRetries: 3
+        });
+        
+        console.log(`Directorio ${dirPath} eliminado exitosamente`);
+        return;
+      } catch (error: any) {
+        console.error(`Error en intento ${attempt}/${maxRetries} al eliminar directorio:`, error);
+        
+        // Si es el último intento, intentar con comandos del sistema
+        if (attempt === maxRetries) {
+          try {
+            if (process.platform === 'win32') {
+              // En Windows, usar rd /s /q con timeout
+              console.log(`Intentando eliminar ${dirPath} con comando 'rd'...`);
+              await new Promise((resolve, reject) => {
+                exec(`timeout /t 2 && rd /s /q "${dirPath}"`, (error, stdout, stderr) => {
+                  if (error) {
+                    console.error(`Error en comando rd:`, stderr);
+                    resolve(null);
+                    return;
+                  }
+                  resolve(stdout);
+                });
+              });
+            } else {
+              // En Unix/Linux/Mac, usar rm -rf
+              console.log(`Intentando eliminar ${dirPath} con comando 'rm -rf'...`);
+              await new Promise((resolve, reject) => {
+                exec(`sleep 2 && rm -rf "${dirPath}"`, (error, stdout, stderr) => {
+                  if (error) {
+                    console.error(`Error en comando rm:`, stderr);
+                    resolve(null);
+                    return;
+                  }
+                  resolve(stdout);
+                });
+              });
+            }
+          } catch (cmdError) {
+            console.error(`Error al eliminar directorio con comando del sistema:`, cmdError);
+            // No lanzar error para permitir continuar
+            console.log(`Se ignorará el error y continuará...`);
+          }
+        }
       }
     }
   }
@@ -1322,25 +1344,27 @@ class SimpleWhatsAppService extends EventEmitter {
   }
 
   /**
-   * Configura un temporizador para cerrar el cliente si no se autentica en 5 minutos
+   * Configura un temporizador para cerrar el cliente si no se autentica en 10 minutos
    */
   private setAuthTimeout(): void {
     // Limpiar cualquier temporizador existente primero
     this.clearAuthTimeout();
     
-    console.log('⏱️ Configurando temporizador de autenticación: 5 minutos');
+    // Reducir el tiempo de espera a 2 minutos
+    const authTimeout = 2 * 60 * 1000; // 2 minutos
+    console.log(`⏱️ Configurando temporizador de autenticación: ${authTimeout/60000} minutos`);
     
-    // Crear nuevo temporizador (5 minutos = 300000 ms)
+    // Crear nuevo temporizador
     this.authTimeoutTimer = setTimeout(() => {
-      console.log('⚠️ Temporizador de autenticación expirado (5 minutos)');
+      console.log('⚠️ Temporizador de autenticación expirado');
       
       if (!this.isAuthenticated) {
-        console.log('🔒 No se autenticó en 5 minutos, cerrando cliente para liberar recursos...');
+        console.log('🔒 No se autenticó en el tiempo esperado, cerrando cliente para liberar recursos...');
         this.close(true)
           .then(() => console.log('Cliente cerrado exitosamente por timeout de autenticación'))
           .catch(error => console.error('Error al cerrar cliente por timeout:', error));
       }
-    }, 5 * 60 * 1000); // 5 minutos
+    }, authTimeout);
   }
   
   /**
