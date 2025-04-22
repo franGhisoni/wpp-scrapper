@@ -55,12 +55,11 @@ class SimpleWhatsAppController {
           res.json({
             status: 'NEED_SCAN',
             qr: existingQR,
-            qrImage: qrBase64 // Incluir la imagen en base64
+            qrImage: qrBase64
           });
         } catch (qrError) {
           console.error('Error generando imagen QR:', qrError);
           
-          // Enviar solo el string QR si hay error en la conversión
           res.json({
             status: 'NEED_SCAN',
             qr: existingQR
@@ -77,8 +76,6 @@ class SimpleWhatsAppController {
       // Inicializar cliente WhatsApp
       console.log('Inicializando cliente WhatsApp');
       
-      // Parámetro para indicar si debemos limpiar la sesión si falla la autenticación
-      // Solo limpiar si el request viene explícitamente para generar un nuevo QR
       const cleanFailedSession = req.query.forceNew === 'true' || false;
       console.log(`Configurado para limpiar sesión si falla: ${cleanFailedSession}`);
       
@@ -89,7 +86,6 @@ class SimpleWhatsAppController {
         console.log('Sesión existente detectada, esperando 5 segundos para autenticación automática');
         await new Promise(resolve => setTimeout(resolve, 5000));
         
-        // Verificar de nuevo si se autenticó
         if (SimpleWhatsAppService.isClientAuthenticated()) {
           console.log('Cliente autenticado automáticamente después de la espera');
           res.json({
@@ -103,14 +99,12 @@ class SimpleWhatsAppController {
       // Función para esperar el QR sin timeout
       const waitForQR = async (): Promise<string | null> => {
         return new Promise<string | null>((resolve) => {
-          // Comprobar primero si ya está autenticado
           if (SimpleWhatsAppService.isClientAuthenticated()) {
             console.log('Cliente ya autenticado al inicio de waitForQR');
             resolve(null);
             return;
           }
 
-          // Comprobar si ya hay un QR existente
           const existingQR = SimpleWhatsAppService.getQRCode();
           if (existingQR) {
             console.log('QR existente encontrado en waitForQR');
@@ -118,7 +112,6 @@ class SimpleWhatsAppController {
             return;
           }
 
-          // Función para manejar el evento de QR
           const onQR = (qr: string) => {
             console.log('Evento QR recibido');
             SimpleWhatsAppService.removeListener('qr', onQR);
@@ -128,7 +121,6 @@ class SimpleWhatsAppController {
             resolve(qr);
           };
 
-          // Función para manejar el evento de autenticación
           const onAuthenticated = () => {
             console.log('Evento authenticated recibido durante waitForQR');
             SimpleWhatsAppService.removeListener('qr', onQR);
@@ -138,18 +130,15 @@ class SimpleWhatsAppController {
             resolve(null);
           };
           
-          // Función para manejar el evento de fallo de autenticación
           const onAuthFailure = (error: string) => {
             console.log(`Evento auth_failure recibido: ${error}`);
             SimpleWhatsAppService.removeListener('qr', onQR);
             SimpleWhatsAppService.removeListener('authenticated', onAuthenticated);
             SimpleWhatsAppService.removeListener('auth_failure', onAuthFailure);
             clearInterval(checkExistingQR);
-            // Mantenemos el resolve como null para que el controlador pueda manejarlo
             resolve(null);
           };
 
-          // Verificar periódicamente si hay un QR existente (por si se perdió el evento)
           const checkExistingQR = setInterval(() => {
             const qr = SimpleWhatsAppService.getQRCode();
             if (qr) {
@@ -161,7 +150,6 @@ class SimpleWhatsAppController {
               resolve(qr);
             }
             
-            // También verificar si se autenticó
             if (SimpleWhatsAppService.isClientAuthenticated()) {
               console.log('Cliente autenticado durante verificación periódica');
               SimpleWhatsAppService.removeListener('qr', onQR);
@@ -172,33 +160,29 @@ class SimpleWhatsAppController {
             }
           }, 1000);
 
-          // Registrar listeners para eventos de QR, autenticación y fallo
           SimpleWhatsAppService.on('qr', onQR);
           SimpleWhatsAppService.on('authenticated', onAuthenticated);
           SimpleWhatsAppService.on('auth_failure', onAuthFailure);
         });
       };
       
-      // Esperar por el QR sin timeout
       console.log('Esperando QR (sin timeout)...');
       const qr = await waitForQR();
       
       if (qr) {
         console.log('QR recibido, enviando respuesta');
         
-        // Convertir el QR string a imagen base64
         try {
           const qrBase64 = await qrcode.toDataURL(qr);
           
           res.json({
             status: 'NEED_SCAN',
             qr: qr,
-            qrImage: qrBase64 // Incluir la imagen en base64
+            qrImage: qrBase64
           });
         } catch (qrError) {
           console.error('Error generando imagen QR:', qrError);
           
-          // Enviar solo el string QR si hay error en la conversión
           res.json({
             status: 'NEED_SCAN',
             qr: qr
@@ -211,7 +195,6 @@ class SimpleWhatsAppController {
           message: 'Cliente autenticado'
         });
       } else {
-        // Si llegamos aquí, puede ser por un fallo de autenticación
         console.log('No se obtuvo QR ni se autenticó, verificando errores...');
         const authError = SimpleWhatsAppService.getAuthError();
         

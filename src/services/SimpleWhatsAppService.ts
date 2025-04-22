@@ -28,12 +28,11 @@ class SimpleWhatsAppService extends EventEmitter {
   private qrCode: string | null = null;
   private isAuthenticated: boolean = false;
   private authError: string | null = null;
-  private static instance: SimpleWhatsAppService;
   private isInitializing: boolean = false;
   private clientId: string = 'whatsapp-api';
   private clientPath: string = './.wwebjs_auth';
   private autoCloseTimeout: NodeJS.Timeout | null = null;
-  private authTimeoutTimer: NodeJS.Timeout | null = null; // Timer para cerrar si no hay autenticación
+  private authTimeoutTimer: NodeJS.Timeout | null = null;
   private previousMembers: Record<string, GroupMember[]> = {};
   private scanning: boolean = false;
   private scanProgressData: {
@@ -50,13 +49,13 @@ class SimpleWhatsAppService extends EventEmitter {
     failedGroups: []
   };
 
-  private static strapiUrl: string = process.env.STRAPI_URL || 'http://127.0.0.1:1337';
-  private static strapiApiToken: string = process.env.STRAPI_API_TOKEN || '';
+  private static readonly strapiUrl: string = process.env.STRAPI_URL || 'http://127.0.0.1:1337';
+  private static readonly strapiApiToken: string = process.env.STRAPI_API_TOKEN || '';
 
-  private constructor() {
+  constructor() {
     super();
     // Debug environment for deployment
-    console.log('💬 SimpleWhatsAppService - Iniciando servicio');
+    console.log('💬 WhatsAppService - Iniciando servicio');
     console.log('🌐 Entorno:', process.env.NODE_ENV || 'No definido (usando development por defecto)');
     console.log('🚪 Puerto:', process.env.PORT || '9877 (por defecto)');
     console.log('🔗 Strapi URL:', SimpleWhatsAppService.strapiUrl);
@@ -64,6 +63,12 @@ class SimpleWhatsAppService extends EventEmitter {
     console.log('🔍 BROWSER_HEADLESS:', process.env.BROWSER_HEADLESS || 'true (por defecto)');
     console.log('⏱️ AUTO_CLOSE_AFTER_SCAN:', process.env.AUTO_CLOSE_AFTER_SCAN || 'No definido');
     console.log('📁 Ruta de sesión:', this.clientPath);
+    
+    // En Render, usar el directorio de datos persistente si está disponible
+    if (process.env.RENDER) {
+      this.clientPath = process.env.RENDER_DATA_PATH || './.wwebjs_auth';
+      console.log('📁 Usando ruta de datos persistente de Render:', this.clientPath);
+    }
     
     // Configure axios for IPv4
     const http = require('http');
@@ -73,31 +78,20 @@ class SimpleWhatsAppService extends EventEmitter {
     const httpAgent = new http.Agent({ 
       family: 4,
       keepAlive: true,
-      timeout: 60000 // Increase timeout for cloud environments
+      timeout: 120000 // Aumentar timeout para Render
     });
     
     const httpsAgent = new https.Agent({ 
       family: 4,
       keepAlive: true,
-      timeout: 60000, // Increase timeout for cloud environments
-      rejectUnauthorized: process.env.NODE_ENV !== 'production' // Only disable cert validation in dev
+      timeout: 120000, // Aumentar timeout para Render
+      rejectUnauthorized: process.env.NODE_ENV !== 'production'
     });
     
     // Apply to axios globally
     axios.defaults.httpAgent = httpAgent;
     axios.defaults.httpsAgent = httpsAgent;
-    axios.defaults.timeout = 60000; // Increase default timeout
-  }
-
-  /**
-   * Obtiene la instancia singleton del servicio
-   * @returns La instancia del servicio
-   */
-  public static getInstance(): SimpleWhatsAppService {
-    if (!SimpleWhatsAppService.instance) {
-      SimpleWhatsAppService.instance = new SimpleWhatsAppService();
-    }
-    return SimpleWhatsAppService.instance;
+    axios.defaults.timeout = 120000; // Aumentar timeout para Render
   }
 
   /**
@@ -131,7 +125,7 @@ class SimpleWhatsAppService extends EventEmitter {
     try {
       console.log(`[${this.clientId}] Inicializando WhatsApp con LocalAuth...`);
       
-      // Verificar y limpiar sesiones antiguas si es necesario
+      // Verificar si hay múltiples sesiones y limpiar RemoteAuth si es necesario
       await this.cleanLocalSessionIfNeeded();
       
       // Si ya hay un cliente, intentar destruirlo primero
@@ -166,7 +160,7 @@ class SimpleWhatsAppService extends EventEmitter {
               dataPath: this.clientPath
             }),
             puppeteer: {
-              headless: headless ? true : false, // Versión compatible con el tipo esperado boolean | "chrome"
+              headless: headless ? true : false,
               args: [
                 '--no-sandbox', 
                 '--disable-extensions',
@@ -175,7 +169,7 @@ class SimpleWhatsAppService extends EventEmitter {
                 '--disable-setuid-sandbox',
                 '--no-first-run',
                 '--no-zygote',
-                '--single-process', // <- this one doesn't works in Windows
+                '--single-process',
                 '--disable-accelerated-2d-canvas',
                 '--disable-web-security',
                 '--disable-features=site-per-process',
@@ -189,7 +183,7 @@ class SimpleWhatsAppService extends EventEmitter {
               ],
               executablePath: process.env.CHROMIUM_PATH || process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
               ignoreHTTPSErrors: true,
-              timeout: 90000, // Aumentar timeout para entornos más lentos
+              timeout: 90000,
             }
           });
           
@@ -214,6 +208,14 @@ class SimpleWhatsAppService extends EventEmitter {
         } catch (initError) {
           console.error(`Error en intento ${retryCount + 1}/${maxRetries} de inicialización:`, initError);
           
+          // Si es el último intento y la autenticación falló, y se solicitó limpiar en caso de fallo
+          if (retryCount >= maxRetries - 1 && cleanFailedSession) {
+            console.log('La autenticación falló y se solicitó limpiar la sesión. Limpiando...');
+            await this.cleanLocalSession().catch(err => {
+              console.error('Error al limpiar sesión después de fallo:', err);
+            });
+          }
+          
           // Destruir el cliente si falló pero se creó
           if (this.client) {
             try {
@@ -232,17 +234,6 @@ class SimpleWhatsAppService extends EventEmitter {
           }
         }
       }
-      
-      // Si el cliente no emitió un evento de autenticación en unos segundos, verificar el estado
-      setTimeout(() => {
-        // Si ha fallado la autenticación y se solicitó limpiar en caso de fallo
-        if (this.authError && cleanFailedSession) {
-          console.log('La autenticación falló y se solicitó limpiar la sesión. Limpiando...');
-          this.cleanLocalSession().catch(err => {
-            console.error('Error al limpiar sesión después de fallo:', err);
-          });
-        }
-      }, 8000); // Dar tiempo suficiente para que ocurran eventos de autenticación
       
     } catch (error) {
       console.error('Error al inicializar cliente WhatsApp:', error);
@@ -1012,23 +1003,25 @@ class SimpleWhatsAppService extends EventEmitter {
   private scheduleAutoClose(): void {
     this.cancelAutoClose();
     
-    // Configurar cierre automático basado en variables de entorno
-    const autoCloseAfterScan = process.env.AUTO_CLOSE_AFTER_SCAN !== 'false'; // Activado por defecto
+    // Leer configuración de variables de entorno con compatibilidad hacia atrás
+    const autoCloseEnabled = process.env.AUTO_CLOSE_ENABLED !== 'false' && 
+                           process.env.AUTO_CLOSE_AFTER_SCAN !== 'false' && 
+                           process.env.FORCE_AUTO_CLOSE !== 'true'; // Por defecto true
     
-    if (autoCloseAfterScan) {
-      // Usar un timeout razonable (10 minutos) por defecto
-      const timeout = parseInt(process.env.AUTO_CLOSE_TIMEOUT || '600000', 10); // 10 minutos por defecto
-      console.log(`ℹ️ Programando cierre automático en ${timeout/60000} minutos...`);
+    // Usar AUTO_CLOSE_TIMEOUT si está definido, sino usar 10 minutos por defecto
+    const autoCloseTimeout = parseInt(process.env.AUTO_CLOSE_TIMEOUT || '600000', 10);
+    
+    if (autoCloseEnabled) {
+      console.log(`ℹ️ Cierre automático activado. Se cerrará en ${autoCloseTimeout/60000} minutos de inactividad`);
       console.log(`   (Las sesiones se conservarán para reconexiones futuras)`);
       
       this.autoCloseTimeout = setTimeout(() => {
         console.log('ℹ️ Cerrando cliente automáticamente por inactividad...');
         console.log('   Las sesiones se conservarán para reconexiones futuras');
-        // Usar close con preserveSession=true para mantener los archivos de sesión
         this.close(true);
-      }, timeout);
+      }, autoCloseTimeout);
     } else {
-      console.log('ℹ️ Cierre automático desactivado (AUTO_CLOSE_AFTER_SCAN=false)');
+      console.log('ℹ️ Cierre automático desactivado (AUTO_CLOSE_ENABLED=false o AUTO_CLOSE_AFTER_SCAN=false)');
     }
   }
 
@@ -1099,23 +1092,19 @@ class SimpleWhatsAppService extends EventEmitter {
    */
   private async cleanLocalSessionIfNeeded(): Promise<void> {
     try {
-      // Comprobar si hay archivos de sesión corruptos
       const sessionDir = `${this.clientPath}/session-${this.clientId}`;
       const tempDir = `${this.clientPath}/RemoteAuth-${this.clientId}`;
       
-      if (fs.existsSync(tempDir)) {
-        console.log(`Encontrado directorio RemoteAuth antiguo ${tempDir}, eliminando...`);
+      // Si existe RemoteAuth y también existe la sesión normal, eliminar RemoteAuth
+      if (fs.existsSync(tempDir) && fs.existsSync(sessionDir)) {
+        console.log(`Se encontraron múltiples sesiones. Eliminando RemoteAuth antiguo...`);
         await this.deleteDir(tempDir);
       }
       
-      if (fs.existsSync(sessionDir) && fs.readdirSync(sessionDir).length === 0) {
-        console.log(`Sesión local vacía o inválida, limpiando...`);
-        await this.cleanLocalSession();
-      } else {
-        console.log(`Sesión local parece válida, intentando usarla...`);
-      }
+      // No hacemos más comprobaciones aquí
+      // La funcionalidad de la sesión se verificará durante el proceso de inicialización
     } catch (error) {
-      console.error('Error al verificar sesión local:', error);
+      console.error('Error al verificar sesiones locales:', error);
     }
   }
 
@@ -1366,6 +1355,5 @@ class SimpleWhatsAppService extends EventEmitter {
   }
 }
 
-// Exportar instancia singleton
-const instance = SimpleWhatsAppService.getInstance();
-export default instance;
+// Exportar una única instancia
+export default new SimpleWhatsAppService();
