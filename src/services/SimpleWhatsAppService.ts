@@ -1344,15 +1344,18 @@ class SimpleWhatsAppService extends EventEmitter {
   }
 
   /**
-   * Configura un temporizador para cerrar el cliente si no se autentica en 10 minutos
+   * Configura un temporizador para cerrar el cliente si no se autentica en el tiempo especificado
    */
   private setAuthTimeout(): void {
     // Limpiar cualquier temporizador existente primero
     this.clearAuthTimeout();
     
-    // Reducir el tiempo de espera a 2 minutos
-    const authTimeout = 2 * 60 * 1000; // 2 minutos
-    console.log(`⏱️ Configurando temporizador de autenticación: ${authTimeout/60000} minutos`);
+    // Obtener el tiempo de espera de las variables de entorno o usar 5 minutos por defecto
+    const authTimeoutMinutes = parseInt(process.env.AUTH_TIMEOUT_MINUTES || '5', 10);
+    const authTimeout = authTimeoutMinutes * 60 * 1000; // Convertir a milisegundos
+    
+    console.log(`⏱️ Configurando temporizador de autenticación: ${authTimeoutMinutes} minutos`);
+    console.log(`   (Puedes ajustar este tiempo con la variable de entorno AUTH_TIMEOUT_MINUTES)`);
     
     // Crear nuevo temporizador
     this.authTimeoutTimer = setTimeout(() => {
@@ -1365,6 +1368,20 @@ class SimpleWhatsAppService extends EventEmitter {
           .catch(error => console.error('Error al cerrar cliente por timeout:', error));
       }
     }, authTimeout);
+    
+    // Añadir un temporizador para mostrar advertencias cada minuto
+    let remainingMinutes = authTimeoutMinutes;
+    const warningInterval = setInterval(() => {
+      remainingMinutes--;
+      if (remainingMinutes > 0) {
+        console.log(`⏰ Tiempo restante para autenticación: ${remainingMinutes} minutos`);
+      }
+      
+      // Limpiar el intervalo si el cliente se autentica o se cierra
+      if (this.isAuthenticated || !this.authTimeoutTimer) {
+        clearInterval(warningInterval);
+      }
+    }, 60 * 1000); // Cada minuto
   }
   
   /**
