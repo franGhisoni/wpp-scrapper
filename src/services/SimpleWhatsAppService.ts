@@ -117,7 +117,7 @@ class SimpleWhatsAppService extends EventEmitter {
     // Limpiar cualquier temporizador de autenticación existente
     this.clearAuthTimeout();
     
-    // Configurar el temporizador de autenticación (reducido a 2 minutos)
+    // Configurar el temporizador de autenticación
     this.setAuthTimeout();
     
     let retryCount = 0;
@@ -186,7 +186,7 @@ class SimpleWhatsAppService extends EventEmitter {
               ],
               executablePath: process.env.CHROMIUM_PATH || process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
               ignoreHTTPSErrors: true,
-              timeout: 60000, // Reducido a 1 minuto
+              timeout: 120000, // Aumentado a 2 minutos
             }
           });
           
@@ -209,8 +209,8 @@ class SimpleWhatsAppService extends EventEmitter {
           const sessionExists = fs.existsSync(`${this.clientPath}/session-${this.clientId}`);
           if (sessionExists) {
             console.log('Sesión existente detectada, esperando autenticación automática...');
-            // Esperar hasta 30 segundos para ver si se autentica automáticamente
-            for (let i = 0; i < 30; i++) {
+            // Esperar hasta 60 segundos para ver si se autentica automáticamente
+            for (let i = 0; i < 60; i++) {
               if (this.isAuthenticated) {
                 console.log('Autenticación automática exitosa');
                 break;
@@ -1085,20 +1085,29 @@ class SimpleWhatsAppService extends EventEmitter {
     this.client.on('disconnected', (reason) => {
       console.log('Cliente desconectado:', reason);
       this.isAuthenticated = false;
+      
+      // Si la razón es LOGOUT, intentar reconectar
+      if (reason === 'LOGOUT') {
+        console.log('Reconectando después de LOGOUT...');
+        this.initialize(false, 3, 5000).catch(error => {
+          console.error('Error al reconectar:', error);
+        });
+      }
+      
       this.emit('disconnected', reason);
     });
     
     // Añadir evento para detectar cuando la sesión no es válida
     this.client.on('loading_screen', () => {
       console.log('Pantalla de carga detectada - verificando estado de sesión...');
-      // Si después de 10 segundos no estamos autenticados, asumimos que necesitamos QR
+      // Aumentar el tiempo de espera a 30 segundos para dar más tiempo a la sesión
       setTimeout(() => {
         if (!this.isAuthenticated) {
           console.log('Sesión no válida detectada - se requerirá nuevo QR');
           this.isAuthenticated = false;
           this.emit('session_invalid');
         }
-      }, 10000);
+      }, 30000); // 30 segundos
     });
   }
 
