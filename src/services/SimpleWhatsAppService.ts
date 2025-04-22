@@ -466,8 +466,12 @@ class SimpleWhatsAppService extends EventEmitter {
               
               // Guardar en Strapi
               try {
-                await SimpleWhatsAppService.saveGroupToStrapi(foundGroup.name, members);
-                console.log(`[${this.clientId}] ✅ Guardado en Strapi: ${foundGroup.name} con ${members.length} miembros`);
+                if (!SimpleWhatsAppService.strapiApiToken) {
+                  console.log(`[${this.clientId}] ⚠️ No se puede guardar en Strapi: STRAPI_API_TOKEN no configurado`);
+                } else {
+                  await SimpleWhatsAppService.saveGroupToStrapi(foundGroup.name, members);
+                  console.log(`[${this.clientId}] ✅ Guardado en Strapi: ${foundGroup.name} con ${members.length} miembros`);
+                }
               } catch (strapiError) {
                 console.error(`[${this.clientId}] ⚠️ Error al guardar en Strapi:`, strapiError);
               }
