@@ -36,10 +36,7 @@ RUN npm install
 # Create utils directory structure
 RUN mkdir -p ./src/utils
 
-# Create logger.ts with proper implementation
-RUN echo "/**\n * Simple console-based logger\n */\nconst logger = {\n  info: (messageOrContext: string | any, contextOrEmpty?: any) => {\n    if (typeof messageOrContext === 'string') {\n      if (contextOrEmpty) {\n        console.log('[INFO] ' + messageOrContext, contextOrEmpty);\n      } else {\n        console.log('[INFO] ' + messageOrContext);\n      }\n    } else {\n      console.log('[INFO]', messageOrContext);\n    }\n  },\n  warn: (messageOrContext: string | any, contextOrEmpty?: any) => {\n    if (typeof messageOrContext === 'string') {\n      if (contextOrEmpty) {\n        console.warn('[WARN] ' + messageOrContext, contextOrEmpty);\n      } else {\n        console.warn('[WARN] ' + messageOrContext);\n      }\n    } else {\n      console.warn('[WARN]', messageOrContext);\n    }\n  },\n  error: (messageOrContext: string | any, contextOrEmpty?: any) => {\n    if (typeof messageOrContext === 'string') {\n      if (contextOrEmpty) {\n        console.error('[ERROR] ' + messageOrContext, contextOrEmpty);\n      } else {\n        console.error('[ERROR] ' + messageOrContext);\n      }\n    } else {\n      console.error('[ERROR]', messageOrContext);\n    }\n  },\n  debug: (messageOrContext: string | any, contextOrEmpty?: any) => {\n    if (typeof messageOrContext === 'string') {\n      if (contextOrEmpty) {\n        console.debug('[DEBUG] ' + messageOrContext, contextOrEmpty);\n      } else {\n        console.debug('[DEBUG] ' + messageOrContext);\n      }\n    } else {\n      console.debug('[DEBUG]', messageOrContext);\n    }\n  }\n};\n\nexport default logger;" > ./src/utils/logger.ts
-
-# Create a case-insensitive alias file
+# Create a single Logger.ts file (uppercase) to avoid case sensitivity issues
 RUN echo "/**\n * Simple console-based logger\n */\nconst logger = {\n  info: (messageOrContext: string | any, contextOrEmpty?: any) => {\n    if (typeof messageOrContext === 'string') {\n      if (contextOrEmpty) {\n        console.log('[INFO] ' + messageOrContext, contextOrEmpty);\n      } else {\n        console.log('[INFO] ' + messageOrContext);\n      }\n    } else {\n      console.log('[INFO]', messageOrContext);\n    }\n  },\n  warn: (messageOrContext: string | any, contextOrEmpty?: any) => {\n    if (typeof messageOrContext === 'string') {\n      if (contextOrEmpty) {\n        console.warn('[WARN] ' + messageOrContext, contextOrEmpty);\n      } else {\n        console.warn('[WARN] ' + messageOrContext);\n      }\n    } else {\n      console.warn('[WARN]', messageOrContext);\n    }\n  },\n  error: (messageOrContext: string | any, contextOrEmpty?: any) => {\n    if (typeof messageOrContext === 'string') {\n      if (contextOrEmpty) {\n        console.error('[ERROR] ' + messageOrContext, contextOrEmpty);\n      } else {\n        console.error('[ERROR] ' + messageOrContext);\n      }\n    } else {\n      console.error('[ERROR]', messageOrContext);\n    }\n  },\n  debug: (messageOrContext: string | any, contextOrEmpty?: any) => {\n    if (typeof messageOrContext === 'string') {\n      if (contextOrEmpty) {\n        console.debug('[DEBUG] ' + messageOrContext, contextOrEmpty);\n      } else {\n        console.debug('[DEBUG] ' + messageOrContext);\n      }\n    } else {\n      console.debug('[DEBUG]', messageOrContext);\n    }\n  }\n};\n\nexport default logger;" > ./src/utils/Logger.ts
 
 # Create RetryHelper for group operations
@@ -48,8 +45,27 @@ RUN echo "/**\n * Retry helper que permite reintentar operaciones con backoff ex
 # Copy all source files
 COPY . .
 
-# Create a custom tsconfig for the build
-RUN echo '{\n  "extends": "./tsconfig.json",\n  "compilerOptions": {\n    "sourceMap": false,\n    "removeComments": true,\n    "forceConsistentCasingInFileNames": false\n  },\n  "exclude": [\n    "node_modules",\n    "**/*.test.ts",\n    "**/*.spec.ts",\n    "**/*.e2e-spec.ts",\n    "src/routes/whatsapp.routes.ts", \n    "src/routes/strapi.routes.ts",\n    "src/controllers/WhatsAppController.ts"\n  ],\n  "include": [\n    "src/**/*.ts"\n  ]\n}' > ./tsconfig.prod.json
+# Fix imports in all TypeScript files for case sensitivity issues - use a simpler pattern
+RUN grep -rl "../utils/logger" ./src --include="*.ts" | xargs -r sed -i 's/..\/utils\/logger/..\/utils\/Logger/g'
+
+# Delete lowercase logger.ts if it exists
+RUN rm -f ./src/utils/logger.ts
+
+# Verify we've fixed all imports
+RUN echo "Verificando imports después de la corrección:" && grep -r "from.*utils/logger" ./src --include="*.ts" || echo "Todo correcto - No hay más imports con problemas"
+
+# Make sure tsconfig.prod.json exists and has proper configuration
+RUN if [ -f tsconfig.prod.json ]; then \
+    echo "tsconfig.prod.json exists - updating configuration"; \
+    sed -i 's/"forceConsistentCasingInFileNames": true/"forceConsistentCasingInFileNames": false/g' tsconfig.prod.json; \
+    grep -q "forceConsistentCasingInFileNames" tsconfig.prod.json || sed -i '/"compilerOptions": {/a \ \ \ \ "forceConsistentCasingInFileNames": false,' tsconfig.prod.json; \
+else \
+    echo "Creating tsconfig.prod.json"; \
+    echo '{\n  "extends": "./tsconfig.json",\n  "compilerOptions": {\n    "sourceMap": false,\n    "removeComments": true,\n    "forceConsistentCasingInFileNames": false\n  },\n  "exclude": [\n    "node_modules",\n    "**/*.test.ts",\n    "**/*.spec.ts",\n    "**/*.e2e-spec.ts",\n    "src/routes/whatsapp.routes.ts", \n    "src/routes/strapi.routes.ts",\n    "src/controllers/WhatsAppController.ts"\n  ],\n  "include": [\n    "src/**/*.ts"\n  ]\n}' > tsconfig.prod.json; \
+fi
+
+# Display tsconfig.prod.json contents for verification
+RUN cat tsconfig.prod.json
 
 # Create directories for session storage
 RUN mkdir -p ./.wwebjs_auth
