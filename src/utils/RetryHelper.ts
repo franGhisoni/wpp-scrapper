@@ -1,5 +1,3 @@
-import { logger } from './Logger';
-
 /**
  * Retry helper que permite reintentar operaciones con backoff exponencial o lineal
  * @param fn Función a reintentar
@@ -10,7 +8,7 @@ import { logger } from './Logger';
  * @returns El resultado de la función o null si falla después de todos los reintentos
  */
 export async function retry<T>(
-  fn: () => Promise<T>,
+  fn: () => T | Promise<T>,
   maxRetries: number,
   delayMs: number,
   errorContext?: string,
@@ -22,7 +20,9 @@ export async function retry<T>(
     try {
       // En el primer intento (attempt 0) ejecutamos directamente
       if (attempt === 0) {
-        return await fn();
+        const result = fn();
+        // Si el resultado no es una promesa, convertirlo a una
+        return result instanceof Promise ? await result : result;
       }
       
       // Calcular delay según el tipo de backoff
@@ -30,35 +30,23 @@ export async function retry<T>(
         ? delayMs * Math.pow(2, attempt - 1) // Exponencial: delayMs, delayMs*2, delayMs*4, ...
         : delayMs * attempt; // Lineal: delayMs, delayMs*2, delayMs*3, ...
       
-      logger.debug({
-        attempt,
-        maxRetries,
-        delay: currentDelay,
-        context: errorContext
-      }, 'Reintentando operación...');
+      console.log(`Reintentando operación (intento ${attempt}/${maxRetries}) - ${errorContext || ''}`);
       
       // Esperar antes de reintentar
       await new Promise(resolve => setTimeout(resolve, currentDelay));
       
       // Reintentar la operación
-      return await fn();
+      const result = fn();
+      // Si el resultado no es una promesa, convertirlo a una
+      return result instanceof Promise ? await result : result;
     } catch (error) {
       lastError = error;
       
-      logger.warn({
-        attempt,
-        maxRetries,
-        error,
-        context: errorContext
-      }, `Intento ${attempt}/${maxRetries} falló`);
+      console.warn(`Intento ${attempt}/${maxRetries} falló: ${errorContext || ''}`);
       
       // Si es el último intento, devolvemos null
       if (attempt === maxRetries) {
-        logger.error({
-          maxRetries,
-          error,
-          context: errorContext
-        }, 'Operación falló después de todos los reintentos');
+        console.error(`Operación falló después de ${maxRetries} reintentos: ${errorContext || ''}`);
         return null;
       }
     }

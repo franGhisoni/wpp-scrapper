@@ -2,8 +2,7 @@ import { Client, GroupChat } from 'whatsapp-web.js';
 import { GroupMember } from '../models/GroupMember';
 import { config } from '../config';
 import { retry } from '../utils/RetryHelper';
-import { logger } from '../utils/Logger';
-import { withTimeout } from '../utils/TimeoutHelper';
+import logger from '../utils/logger';
 
 export interface ScanResult {
   name: string;
@@ -17,6 +16,31 @@ export class GroupScanner {
     private client: Client,
     private clientId: string
   ) {}
+
+  /**
+   * Implementación de timeout simple
+   */
+  private async withTimeout<T>(
+    fn: () => Promise<T>,
+    timeoutMs: number,
+    errorMessage = 'Operation timed out'
+  ): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        reject(new Error(errorMessage));
+      }, timeoutMs);
+
+      fn()
+        .then((result) => {
+          clearTimeout(timeoutId);
+          resolve(result);
+        })
+        .catch((error) => {
+          clearTimeout(timeoutId);
+          reject(error);
+        });
+    });
+  }
 
   /**
    * Escanea múltiples grupos y devuelve sus miembros
@@ -33,9 +57,9 @@ export class GroupScanner {
       throw new Error('Cliente no disponible antes de obtener chats');
     }
     
-    const allChats = await withTimeout(
-      this.client.getChats(),
-      config.CHATS_TIMEOUT_MS
+    const allChats = await this.withTimeout(
+      () => this.client.getChats(),
+      30000 // Timeout en milisegundos (30 segundos)
     );
     
     logger.info({ count: allChats.length }, 'Total chats obtenidos');
@@ -48,9 +72,9 @@ export class GroupScanner {
       try {
         logger.info({ group: groupName }, 'Escaneando grupo');
         
-        const result = await withTimeout(
-          this.scanSingleGroup(groupName, allGroups),
-          config.GROUP_TIMEOUT_MS
+        const result = await this.withTimeout(
+          () => this.scanSingleGroup(groupName, allGroups),
+          300000 // Timeout en milisegundos (5 minutos)
         );
         
         results[groupName] = result;
@@ -100,10 +124,10 @@ export class GroupScanner {
       logger.info({ group: foundGroup.name }, 'Grupo encontrado. Obteniendo participantes...');
       
       // Obtener participantes con reintentos
-      const participants = await retry(
-        () => foundGroup.participants,
-        config.MAX_RETRIES,
-        config.RETRY_DELAY_MS,
+      const participants = await retry<any[]>(
+        () => Promise.resolve(foundGroup.participants),
+        3, // Máximo número de reintentos
+        1000, // Retraso entre reintentos en ms
         `Error al obtener participantes de ${foundGroup.name}`
       );
       
