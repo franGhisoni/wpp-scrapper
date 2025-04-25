@@ -1,10 +1,8 @@
-import { Client, LocalAuth, GroupChat } from 'whatsapp-web.js';
+import { Client, NoAuth, GroupChat } from 'whatsapp-web.js';
 import qrcode from 'qrcode-terminal';
-import fs from 'fs';
 import { GroupMember } from '../models/GroupMember';
 import { EventEmitter } from 'events';
 import dotenv from 'dotenv';
-import { exec } from 'child_process';
 import axios from 'axios';
 import GroupMemberRepository from '../repositories/GroupMemberRepository';
 
@@ -30,7 +28,6 @@ class SimpleWhatsAppService extends EventEmitter {
   private authError: string | null = null;
   private isInitializing: boolean = false;
   private clientId: string = 'whatsapp-api';
-  private clientPath: string = './.wwebjs_auth';
   private autoCloseTimeout: NodeJS.Timeout | null = null;
   private authTimeoutTimer: NodeJS.Timeout | null = null;
   private previousMembers: Record<string, GroupMember[]> = {};
@@ -52,6 +49,15 @@ class SimpleWhatsAppService extends EventEmitter {
   private static readonly strapiUrl: string = process.env.STRAPI_URL || 'http://127.0.0.1:1337';
   private static readonly strapiApiToken: string = process.env.STRAPI_API_TOKEN || '';
 
+  // Configuraciones de rendimiento
+  private static readonly initialWaitMs: number = parseInt(process.env.INITIAL_WAIT_MS || '2000', 10);
+  private static readonly groupTimeoutMs: number = parseInt(process.env.GROUP_TIMEOUT_MS || '300000', 10);
+  private static readonly strapiTimeoutMs: number = parseInt(process.env.STRAPI_TIMEOUT_MS || '5000', 10);
+  private static readonly strapiRetryDelayMs: number = parseInt(process.env.STRAPI_RETRY_DELAY_MS || '1000', 10);
+  private static readonly maxRetries: number = parseInt(process.env.MAX_RETRIES || '3', 10);
+  private static readonly batchSize: number = parseInt(process.env.BATCH_SIZE || '100', 10);
+  private static readonly maxConcurrentRequests: number = parseInt(process.env.MAX_CONCURRENT_REQUESTS || '10', 10);
+
   constructor() {
     super();
     // Debug environment for deployment
@@ -62,13 +68,16 @@ class SimpleWhatsAppService extends EventEmitter {
     console.log('🔑 Strapi API Token configurado:', SimpleWhatsAppService.strapiApiToken ? 'Sí' : 'No');
     console.log('🔍 BROWSER_HEADLESS:', process.env.BROWSER_HEADLESS || 'true (por defecto)');
     console.log('⏱️ AUTO_CLOSE_AFTER_SCAN:', process.env.AUTO_CLOSE_AFTER_SCAN || 'No definido');
-    console.log('📁 Ruta de sesión:', this.clientPath);
     
-    // En Render, usar el directorio de datos persistente si está disponible
-    if (process.env.RENDER) {
-      this.clientPath = process.env.RENDER_DATA_PATH || './.wwebjs_auth';
-      console.log('📁 Usando ruta de datos persistente de Render:', this.clientPath);
-    }
+    // Log de configuraciones de rendimiento
+    console.log('⚡ Configuraciones de rendimiento:');
+    console.log(`   - INITIAL_WAIT_MS: ${SimpleWhatsAppService.initialWaitMs}ms`);
+    console.log(`   - GROUP_TIMEOUT_MS: ${SimpleWhatsAppService.groupTimeoutMs}ms`);
+    console.log(`   - STRAPI_TIMEOUT_MS: ${SimpleWhatsAppService.strapiTimeoutMs}ms`);
+    console.log(`   - STRAPI_RETRY_DELAY_MS: ${SimpleWhatsAppService.strapiRetryDelayMs}ms`);
+    console.log(`   - MAX_RETRIES: ${SimpleWhatsAppService.maxRetries}`);
+    console.log(`   - BATCH_SIZE: ${SimpleWhatsAppService.batchSize}`);
+    console.log(`   - MAX_CONCURRENT_REQUESTS: ${SimpleWhatsAppService.maxConcurrentRequests}`);
     
     // Configure axios for IPv4
     const http = require('http');
@@ -78,29 +87,26 @@ class SimpleWhatsAppService extends EventEmitter {
     const httpAgent = new http.Agent({ 
       family: 4,
       keepAlive: true,
-      timeout: 120000 // Aumentar timeout para Render
+      timeout: SimpleWhatsAppService.strapiTimeoutMs
     });
     
     const httpsAgent = new https.Agent({ 
       family: 4,
       keepAlive: true,
-      timeout: 120000, // Aumentar timeout para Render
+      timeout: SimpleWhatsAppService.strapiTimeoutMs,
       rejectUnauthorized: process.env.NODE_ENV !== 'production'
     });
     
     // Apply to axios globally
     axios.defaults.httpAgent = httpAgent;
     axios.defaults.httpsAgent = httpsAgent;
-    axios.defaults.timeout = 120000; // Aumentar timeout para Render
+    axios.defaults.timeout = SimpleWhatsAppService.strapiTimeoutMs;
   }
 
   /**
    * Inicializa el cliente de WhatsApp Web
-   * @param cleanFailedSession Si es true, limpiará la sesión existente si falla la autenticación
-   * @param maxRetries Número máximo de intentos de reconexión
-   * @param retryDelayMs Tiempo entre intentos en milisegundos
    */
-  public async initialize(cleanFailedSession: boolean = false, maxRetries: number = 3, retryDelayMs: number = 5000): Promise<void> {
+  public async initialize(maxRetries: number = 3, retryDelayMs: number = 5000): Promise<void> {
     if (this.isInitializing) {
       console.log('Inicialización ya en progreso, esperando...');
       return;
@@ -123,10 +129,7 @@ class SimpleWhatsAppService extends EventEmitter {
     let retryCount = 0;
     
     try {
-      console.log(`[${this.clientId}] Inicializando WhatsApp con LocalAuth...`);
-      
-      // Verificar si hay múltiples sesiones y limpiar RemoteAuth si es necesario
-      await this.cleanLocalSessionIfNeeded();
+      console.log(`[${this.clientId}] Inicializando WhatsApp con NoAuth...`);
       
       // Si ya hay un cliente, intentar destruirlo primero
       if (this.client) {
@@ -156,12 +159,9 @@ class SimpleWhatsAppService extends EventEmitter {
           const headless = process.env.BROWSER_HEADLESS !== 'false';
           console.log(`[${this.clientId}] Configurado Puppeteer en modo headless: ${headless}`);
           
-          // Inicializar cliente con LocalAuth
+          // Inicializar cliente con NoAuth
           this.client = new Client({
-            authStrategy: new LocalAuth({
-              clientId: this.clientId,
-              dataPath: this.clientPath
-            }),
+            authStrategy: new NoAuth(),
             puppeteer: {
               headless: headless ? true : false,
               args: [
@@ -205,33 +205,11 @@ class SimpleWhatsAppService extends EventEmitter {
             throw new Error('El cliente no se inicializó correctamente o la página de Puppeteer no está disponible');
           }
           
-          // Si tenemos una sesión existente, esperar a ver si se autentica automáticamente
-          const sessionExists = fs.existsSync(`${this.clientPath}/session-${this.clientId}`);
-          if (sessionExists) {
-            console.log('Sesión existente detectada, esperando autenticación automática...');
-            // Esperar hasta 60 segundos para ver si se autentica automáticamente
-            for (let i = 0; i < 60; i++) {
-              if (this.isAuthenticated) {
-                console.log('Autenticación automática exitosa');
-                break;
-              }
-              await new Promise(resolve => setTimeout(resolve, 1000));
-            }
-          }
-          
-          console.log('Cliente WhatsApp inicializado con LocalAuth');
+          console.log('Cliente WhatsApp inicializado con NoAuth');
           initSuccess = true;
           
         } catch (initError) {
           console.error(`Error en intento ${retryCount + 1}/${maxRetries} de inicialización:`, initError);
-          
-          // Si es el último intento y la autenticación falló, y se solicitó limpiar en caso de fallo
-          if (retryCount >= maxRetries - 1 && cleanFailedSession) {
-            console.log('La autenticación falló y se solicitó limpiar la sesión. Limpiando...');
-            await this.cleanLocalSession().catch(err => {
-              console.error('Error al limpiar sesión después de fallo:', err);
-            });
-          }
           
           // Destruir el cliente si falló pero se creó
           if (this.client) {
@@ -273,8 +251,246 @@ class SimpleWhatsAppService extends EventEmitter {
   }
 
   /**
-   * Obtiene información de un grupo de WhatsApp
+   * Configura los eventos del cliente
    */
+  private setupEvents(): void {
+    if (!this.client) return;
+    
+    this.client.on('qr', (qr) => {
+      console.log('Nuevo código QR generado');
+      this.qrCode = qr;
+      this.isAuthenticated = false;
+      qrcode.generate(qr, { small: true });
+      this.emit('qr', qr);
+    });
+    
+    this.client.on('authenticated', () => {
+      console.log('Cliente autenticado correctamente');
+      this.isAuthenticated = true;
+      this.qrCode = null;
+      this.authError = null;
+      this.clearAuthTimeout();
+      this.emit('authenticated');
+    });
+    
+    this.client.on('auth_failure', (error) => {
+      console.error('Error de autenticación:', error);
+      this.authError = error?.toString() || 'Error de autenticación';
+      this.isAuthenticated = false;
+      this.emit('auth_failure', this.authError);
+    });
+    
+    this.client.on('ready', () => {
+      console.log('Cliente listo para usar');
+      this.isAuthenticated = true;
+      this.authError = null;
+      this.emit('ready');
+    });
+    
+    this.client.on('disconnected', (reason) => {
+      console.log('Cliente desconectado:', reason);
+      this.isAuthenticated = false;
+      
+      // Si la razón es LOGOUT, intentar reconectar
+      if (reason === 'LOGOUT') {
+        console.log('Reconectando después de LOGOUT...');
+        this.initialize(3, 5000).catch(error => {
+          console.error('Error al reconectar:', error);
+        });
+      }
+      
+      this.emit('disconnected', reason);
+    });
+  }
+
+  /**
+   * Configura un temporizador para cerrar el cliente si no se autentica en el tiempo especificado
+   */
+  private setAuthTimeout(): void {
+    // Limpiar cualquier temporizador existente primero
+    this.clearAuthTimeout();
+    
+    // Obtener el tiempo de espera de las variables de entorno o usar 10 minutos por defecto
+    const authTimeoutMinutes = parseInt(process.env.AUTH_TIMEOUT_MINUTES || '10', 10);
+    const authTimeout = authTimeoutMinutes * 60 * 1000; // Convertir a milisegundos
+    
+    console.log(`⏱️ Configuración de timeouts:`);
+    console.log(`   - AUTH_TIMEOUT_MINUTES: ${authTimeoutMinutes} minutos`);
+    console.log(`   - AUTO_CLOSE_TIMEOUT: ${parseInt(process.env.AUTO_CLOSE_TIMEOUT || '300000', 10)/60000} minutos`);
+    console.log(`   - AUTO_CLOSE_ENABLED: ${process.env.AUTO_CLOSE_ENABLED !== 'false' ? 'Sí' : 'No'}`);
+    console.log(`   - AUTO_CLOSE_AFTER_SCAN: ${process.env.AUTO_CLOSE_AFTER_SCAN !== 'false' ? 'Sí' : 'No'}`);
+    console.log(`   - FORCE_AUTO_CLOSE: ${process.env.FORCE_AUTO_CLOSE === 'true' ? 'Sí' : 'No'}`);
+    
+    // Crear nuevo temporizador
+    this.authTimeoutTimer = setTimeout(() => {
+      console.log('⚠️ Temporizador de autenticación expirado');
+      
+      if (!this.isAuthenticated) {
+        console.log('🔒 No se autenticó en el tiempo esperado, cerrando cliente para liberar recursos...');
+        this.close()
+          .then(() => {
+            console.log('Cliente cerrado exitosamente por timeout de autenticación');
+            this.emit('auth_timeout');
+          })
+          .catch(error => {
+            console.error('Error al cerrar cliente por timeout:', error);
+            this.emit('auth_timeout_error', error);
+          });
+      }
+    }, authTimeout);
+    
+    // Añadir un temporizador para mostrar advertencias cada minuto
+    let remainingMinutes = authTimeoutMinutes;
+    const warningInterval = setInterval(() => {
+      remainingMinutes--;
+      if (remainingMinutes > 0) {
+        console.log(`⏰ Tiempo restante para autenticación: ${remainingMinutes} minutos`);
+        this.emit('auth_timeout_warning', remainingMinutes);
+      }
+      
+      // Limpiar el intervalo si el cliente se autentica o se cierra
+      if (this.isAuthenticated || !this.authTimeoutTimer) {
+        clearInterval(warningInterval);
+      }
+    }, 60 * 1000); // Cada minuto
+  }
+  
+  /**
+   * Limpia el temporizador de autenticación
+   */
+  private clearAuthTimeout(): void {
+    if (this.authTimeoutTimer) {
+      clearTimeout(this.authTimeoutTimer);
+      this.authTimeoutTimer = null;
+      console.log('Temporizador de autenticación cancelado');
+    }
+  }
+
+  /**
+   * Cierra el cliente y libera recursos
+   */
+  public async close(): Promise<void> {
+    // Cancelar cierre automático si está activo
+    this.cancelAutoClose();
+    
+    console.log(`[${this.clientId}] Iniciando cierre de cliente WhatsApp`);
+    
+    try {
+      if (this.client) {
+        try {
+          // Destruir cliente para liberar recursos
+          console.log(`[${this.clientId}] Destruyendo cliente`);
+          await this.client.destroy()
+            .catch(e => console.error(`[${this.clientId}] Error en client.destroy():`, e));
+        } catch (destroyError) {
+          console.error(`[${this.clientId}] Error durante destroy:`, destroyError);
+        }
+        
+        // Limpiar la referencia del cliente
+        this.client = null;
+      }
+      
+      // Restablecer estado
+      this.isAuthenticated = false;
+      this.qrCode = null;
+      
+      console.log(`[${this.clientId}] Cierre de cliente completado con éxito`);
+    } catch (error) {
+      console.error(`[${this.clientId}] Error fatal durante cierre de cliente:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Programa el cierre automático del cliente
+   */
+  private scheduleAutoClose(): void {
+    this.cancelAutoClose();
+    
+    // Leer configuración de variables de entorno
+    const autoCloseEnabled = process.env.AUTO_CLOSE_ENABLED !== 'false' && 
+                           process.env.AUTO_CLOSE_AFTER_SCAN !== 'false' && 
+                           process.env.FORCE_AUTO_CLOSE !== 'true';
+    
+    const autoCloseTimeout = parseInt(process.env.AUTO_CLOSE_TIMEOUT || '300000', 10);
+    
+    if (autoCloseEnabled) {
+      console.log(`ℹ️ Cierre automático activado. Se cerrará en ${autoCloseTimeout/60000} minutos de inactividad`);
+      
+      this.autoCloseTimeout = setTimeout(() => {
+        console.log('ℹ️ Cerrando cliente automáticamente por inactividad...');
+        this.close();
+      }, autoCloseTimeout);
+    } else {
+      console.log('ℹ️ Cierre automático desactivado:');
+      console.log(`   - AUTO_CLOSE_ENABLED: ${process.env.AUTO_CLOSE_ENABLED !== 'false' ? 'Sí' : 'No'}`);
+      console.log(`   - AUTO_CLOSE_AFTER_SCAN: ${process.env.AUTO_CLOSE_AFTER_SCAN !== 'false' ? 'Sí' : 'No'}`);
+      console.log(`   - FORCE_AUTO_CLOSE: ${process.env.FORCE_AUTO_CLOSE === 'true' ? 'Sí' : 'No'}`);
+    }
+  }
+
+  /**
+   * Cancela el cierre automático programado
+   */
+  private cancelAutoClose(): void {
+    if (this.autoCloseTimeout) {
+      clearTimeout(this.autoCloseTimeout);
+      this.autoCloseTimeout = null;
+      console.log('Cierre automático cancelado');
+    }
+  }
+
+  /**
+   * Obtiene el código QR para autenticación
+   */
+  public getQRCode(): string | null {
+    return this.qrCode;
+  }
+
+  /**
+   * Verifica si el cliente está autenticado
+   */
+  public isClientAuthenticated(): boolean {
+    return this.isAuthenticated;
+  }
+
+  /**
+   * Obtiene el error de autenticación si existe
+   * @returns El mensaje de error o null si no hay error
+   */
+  public getAuthError(): string | null {
+    return this.authError;
+  }
+
+  /**
+   * Indica si el servicio está actualmente escaneando grupos
+   */
+  public isScanning(): boolean {
+    return this.scanning;
+  }
+  
+  /**
+   * Obtiene el progreso actual del escaneo
+   */
+  public getScanProgress(): {
+    total: number;
+    completed: number;
+    successful: number;
+    failed: number;
+    failedGroups: string[];
+    percent: number;
+  } {
+    const percent = this.scanProgressData.total > 0 
+      ? Math.round((this.scanProgressData.completed / this.scanProgressData.total) * 100) 
+      : 0;
+      
+    return {
+      ...this.scanProgressData,
+      percent
+    };
+  }
+
+
   public async getGroupInfo(groupName: string): Promise<{ name: string, members: GroupMember[] }> {
     if (!this.client || !this.isAuthenticated) {
       await this.initialize();
@@ -352,6 +568,26 @@ class SimpleWhatsAppService extends EventEmitter {
   }
 
   /**
+   * Obtiene métricas de un grupo
+   */
+  public async getGroupMetrics(groupName: string, sinceHours: number = 24): Promise<GroupMetrics> {
+    try {
+      // Reemplazarlo totalmente para usar el repositorio que gestiona los datos de Strapi
+      console.log(`Obteniendo métricas del grupo "${groupName}" (últimas ${sinceHours} horas)...`);
+      
+      // Usar GroupMemberRepository para obtener métricas basadas en Strapi
+      const metrics = await GroupMemberRepository.getGroupMetrics(groupName, sinceHours);
+      
+      console.log(`Métricas obtenidas para grupo "${groupName}": ${metrics.totalMembers} miembros, ${metrics.newMembers.length} nuevos, ${metrics.leftMembers.length} salieron`);
+      
+      return metrics;
+    } catch (error) {
+      console.error(`Error al obtener métricas del grupo "${groupName}":`, error);
+      throw error;
+    }
+  }
+
+  /**
    * Escanea múltiples grupos y devuelve información
    */
   public async scanGroups(groupNames: string[]): Promise<Record<string, { name: string, members: GroupMember[] }>> {
@@ -367,9 +603,9 @@ class SimpleWhatsAppService extends EventEmitter {
       throw new Error('Cliente no autenticado. Por favor escanee el código QR primero.');
     }
     
-    // Añadir un retraso para asegurar que el cliente esté completamente listo
-    console.log('Cliente autenticado. Esperando 5 segundos para asegurar que esté listo...');
-    await new Promise(resolve => setTimeout(resolve, 5000));
+    // Reducir el tiempo de espera según la configuración
+    console.log(`Cliente autenticado. Esperando ${SimpleWhatsAppService.initialWaitMs}ms para asegurar que esté listo...`);
+    await new Promise(resolve => setTimeout(resolve, SimpleWhatsAppService.initialWaitMs));
     
     // Verificar nuevamente el estado del cliente
     if (!this.client || !this.client.pupPage) {
@@ -393,8 +629,8 @@ class SimpleWhatsAppService extends EventEmitter {
     const results: Record<string, { name: string, members: GroupMember[] }> = {};
     const failedGroups: string[] = [];
     
-    // Aumentar el timeout por grupo significativamente
-    const groupTimeout = 300000; // 5 minutos máximo por grupo
+    // Usar el timeout configurado por grupo
+    const groupTimeout = SimpleWhatsAppService.groupTimeoutMs;
     console.log(`[${this.clientId}] Timeout por grupo configurado a ${groupTimeout/1000} segundos`);
     
     try {
@@ -440,10 +676,10 @@ class SimpleWhatsAppService extends EventEmitter {
               
               console.log(`[${this.clientId}] Grupo encontrado: ${foundGroup.name}. Obteniendo participantes...`);
               
-              // Intentar obtener participantes con reintentos
+              // Intentar obtener participantes con reintentos configurados
               let participants = null;
               let retryCount = 0;
-              const maxRetries = 3;
+              const maxRetries = SimpleWhatsAppService.maxRetries;
               
               while (!participants && retryCount < maxRetries) {
                 try {
@@ -452,7 +688,7 @@ class SimpleWhatsAppService extends EventEmitter {
                   retryCount++;
                   if (retryCount < maxRetries) {
                     console.log(`[${this.clientId}] Reintentando obtener participantes (intento ${retryCount}/${maxRetries})...`);
-                    await new Promise(resolve => setTimeout(resolve, 2000 * retryCount));
+                    await new Promise(resolve => setTimeout(resolve, SimpleWhatsAppService.strapiRetryDelayMs * retryCount));
                   } else {
                     throw error;
                   }
@@ -485,28 +721,30 @@ class SimpleWhatsAppService extends EventEmitter {
               // Guardar miembros actuales para métricas futuras
               this.previousMembers[foundGroup.name] = [...members];
               
-              // Guardar en Strapi con reintentos
+              // Guardar en Strapi con reintentos configurados
               let strapiSuccess = false;
               retryCount = 0;
               
               while (!strapiSuccess && retryCount < maxRetries) {
-                try {
-                  if (!SimpleWhatsAppService.strapiApiToken) {
-                    console.log(`[${this.clientId}] ⚠️ No se puede guardar en Strapi: STRAPI_API_TOKEN no configurado`);
-                    strapiSuccess = true; // Considerar como éxito si no hay token
-                  } else {
-                    await SimpleWhatsAppService.saveGroupToStrapi(foundGroup.name, members);
-                    console.log(`[${this.clientId}] ✅ Guardado en Strapi: ${foundGroup.name} con ${members.length} miembros`);
+              try {
+                if (!SimpleWhatsAppService.strapiApiToken) {
+                  console.log(`[${this.clientId}] ⚠️ No se puede guardar en Strapi: STRAPI_API_TOKEN no configurado`);
                     strapiSuccess = true;
-                  }
-                } catch (strapiError) {
+                } else {
+                    await SimpleWhatsAppService.saveGroupToStrapi({
+                      name: foundGroup.name,
+                      members
+                    });
+                  console.log(`[${this.clientId}] ✅ Guardado en Strapi: ${foundGroup.name} con ${members.length} miembros`);
+                    strapiSuccess = true;
+                }
+              } catch (strapiError) {
                   retryCount++;
                   if (retryCount < maxRetries) {
                     console.log(`[${this.clientId}] Reintentando guardar en Strapi (intento ${retryCount}/${maxRetries})...`);
-                    await new Promise(resolve => setTimeout(resolve, 2000 * retryCount));
+                    await new Promise(resolve => setTimeout(resolve, SimpleWhatsAppService.strapiRetryDelayMs * retryCount));
                   } else {
                     console.error(`[${this.clientId}] ⚠️ Error al guardar en Strapi después de ${maxRetries} intentos:`, strapiError);
-                    // No lanzar error, continuar con el proceso
                   }
                 }
               }
@@ -579,826 +817,53 @@ class SimpleWhatsAppService extends EventEmitter {
   }
 
   /**
-   * Guarda información de grupo en Strapi
+   * Guarda la información del grupo en Strapi
+   * @param groupInfo Objeto con información del grupo
+   * @returns Respuesta de la API de Strapi
    */
-  private static async saveGroupToStrapi(groupName: string, members: GroupMember[]): Promise<void> {
+  static async saveGroupToStrapi(groupInfo: any): Promise<any> {
+    console.log(`Guardando grupo ${groupInfo.name || 'desconocido'} en Strapi...`);
     try {
-      if (!SimpleWhatsAppService.strapiApiToken) {
-        console.log('⚠️ No se puede guardar en Strapi: STRAPI_API_TOKEN no configurado');
-        return;
+      // Obtenemos la URL y el token de las variables de entorno
+      const strapiUrl = process.env.STRAPI_URL || 'http://localhost:1337';
+      const strapiToken = process.env.STRAPI_TOKEN;
+
+      if (!strapiToken) {
+        console.warn('STRAPI_TOKEN no configurado, no se guardará en Strapi');
+        return null;
       }
 
-      const timestamp = new Date().toISOString();
-      console.log(`Guardando en Strapi con URL: ${SimpleWhatsAppService.strapiUrl}`);
-      
-      // Forzar URL IPv4
-      const strapiUrl = SimpleWhatsAppService.strapiUrl.replace('localhost', '127.0.0.1');
-      
-      // Verificar si la URL de Strapi es válida
-      if (!strapiUrl.startsWith('http://') && !strapiUrl.startsWith('https://')) {
-        throw new Error(`URL de Strapi inválida: ${strapiUrl}`);
-      }
-      
-      try {
-        // Verificar si Strapi está funcionando
-        const healthCheck = await axios.get(`${strapiUrl}/api/ping`, {
-          headers: { 'Authorization': `Bearer ${SimpleWhatsAppService.strapiApiToken}` },
-          validateStatus: () => true,
-          timeout: 5000 // 5 segundos de timeout
-        });
-        
-        console.log(`Estado de Strapi: ${healthCheck.status} - ${healthCheck.statusText}`);
-        
-        if (healthCheck.status >= 400) {
-          throw new Error(`Error conectando con Strapi (${healthCheck.status}): ${healthCheck.statusText}`);
-        }
-      } catch (pingError) {
-        console.error('Error verificando Strapi:', pingError);
-        console.log('⚠️ Continuando a pesar del error...');
-      }
-      
-      // Verificar si el grupo ya existe
-      console.log(`Verificando si el grupo "${groupName}" ya existe en Strapi...`);
-      let groupId = null;
-      
-      try {
-        const existingGroups = await axios.get(
-          `${strapiUrl}/api/whatsapp-groups`,
-          {
-            params: {
-              'filters[name][$eq]': groupName,
-              'sort': 'createdAt:desc',
-            },
-            headers: {
-              'Authorization': `Bearer ${SimpleWhatsAppService.strapiApiToken}`,
-              'Content-Type': 'application/json'
-            },
-            validateStatus: () => true,
-            timeout: 5000 // 5 segundos de timeout
-          }
-        );
-        
-        if (existingGroups.status === 200 && existingGroups.data?.data?.length > 0) {
-          const groups = existingGroups.data.data;
-          if (groups.length > 1) {
-            console.log(`⚠️ ADVERTENCIA: Se encontraron ${groups.length} grupos con el nombre "${groupName}". Posibles duplicados.`);
-            groups.forEach((g, idx) => {
-              console.log(`  Grupo #${idx+1}: ID ${g.id}, creado: ${g.attributes.createdAt || 'desconocido'}`);
-            });
-          }
-          
-          groupId = groups[0].id;
-          console.log(`Usando grupo "${groupName}" con ID: ${groupId}.`);
-          
-          // Actualizar grupo existente
-          const updateResponse = await axios.put(
-            `${strapiUrl}/api/whatsapp-groups/${groupId}`,
-            {
-              data: {
-                lastScan: timestamp,
-                memberCount: members.length
-              }
-            },
-            {
-              headers: {
-                'Authorization': `Bearer ${SimpleWhatsAppService.strapiApiToken}`,
-                'Content-Type': 'application/json'
-              },
-              validateStatus: () => true,
-              timeout: 5000 // 5 segundos de timeout
-            }
-          );
-          
-          if (updateResponse.status >= 400) {
-            console.error(`Error al actualizar grupo (${updateResponse.status}):`);
-            console.error(updateResponse.data);
-          } else {
-            console.log(`Grupo "${groupName}" actualizado correctamente`);
-          }
-        } else {
-          // Si no existe, crear nuevo grupo
-          console.log(`Creando nuevo grupo "${groupName}"...`);
-          const groupResponse = await axios.post(
-            `${strapiUrl}/api/whatsapp-groups`, 
-            {
-              data: {
-                name: groupName,
-                lastScan: timestamp,
-                memberCount: members.length,
-                status: 'draft'
-              }
-            },
-            {
-              headers: {
-                'Authorization': `Bearer ${SimpleWhatsAppService.strapiApiToken}`,
-                'Content-Type': 'application/json'
-              },
-              validateStatus: () => true,
-              timeout: 5000 // 5 segundos de timeout
-            }
-          );
-          
-          if (groupResponse.status >= 400) {
-            console.error(`Error al crear grupo (${groupResponse.status}):`);
-            console.error(groupResponse.data);
-            throw new Error(`Error al crear grupo: ${groupResponse.status} ${groupResponse.statusText}`);
-          }
-          
-          if (!groupResponse.data || !groupResponse.data.data) {
-            console.error('Respuesta de Strapi:', groupResponse.data);
-            throw new Error('Respuesta de Strapi inválida al crear grupo');
-          }
-          
-          groupId = groupResponse.data.data.id;
-          console.log(`Grupo "${groupName}" creado con ID: ${groupId}`);
-        }
-      } catch (groupError) {
-        console.error(`Error al verificar/crear grupo "${groupName}":`, groupError);
-        throw groupError;
-      }
-      
-      if (!groupId) {
-        throw new Error(`No se pudo obtener ID del grupo "${groupName}"`);
-      }
-      
-      // Obtener todos los miembros existentes para este grupo
-      console.log(`Obteniendo miembros existentes para grupo "${groupName}" (ID: ${groupId})...`);
-      let existingGroupMembers: any[] = [];
-      
-      try {
-        const existingMembersResponse = await axios.get(
-          `${strapiUrl}/api/group-members`,
-          {
-            params: {
-              'filters[whats_app_group][id][$eq]': groupId,
-              'pagination[pageSize]': 500,
-            },
-            headers: {
-              'Authorization': `Bearer ${SimpleWhatsAppService.strapiApiToken}`,
-              'Content-Type': 'application/json'
-            },
-            validateStatus: () => true,
-            timeout: 5000 // 5 segundos de timeout
-          }
-        );
-        
-        if (existingMembersResponse.status === 200 && existingMembersResponse.data?.data?.length > 0) {
-          existingGroupMembers = existingMembersResponse.data.data;
-          console.log(`Se encontraron ${existingGroupMembers.length} miembros existentes para el grupo`);
-        } else {
-          console.log(`No se encontraron miembros existentes para el grupo`);
-        }
-      } catch (membersListError) {
-        console.error(`Error al obtener miembros existentes:`, membersListError);
-        console.log('⚠️ Continuando sin verificación previa de miembros...');
-      }
-      
-      // Crear mapa para búsqueda rápida de miembros existentes
-      const memberMap = new Map();
-      for (const existingMember of existingGroupMembers) {
-        const phoneNumber = existingMember.attributes.phone_number;
-        memberMap.set(phoneNumber, {
-          id: existingMember.id,
-          join_date: existingMember.attributes.Join_date,
-          is_active: existingMember.attributes.is_active,
-          left_date: existingMember.attributes.Left_date
-        });
-      }
-      
-      // Preparar lista de números de teléfono actuales
-      const currentPhoneNumbers = new Set(members.map(m => m.phoneNumber));
-      
-      // Marcar los miembros que ya no están en el grupo
-      const updateLeftMembersPromises = [];
-      
-      for (const existingMember of existingGroupMembers) {
-        const phoneNumber = existingMember.attributes.phone_number;
-        if (!currentPhoneNumbers.has(phoneNumber) && !existingMember.attributes.Left_date) {
-          console.log(`Miembro ${phoneNumber} ya no está en el grupo, actualizando left_date`);
-          updateLeftMembersPromises.push(
-            axios.put(
-              `${strapiUrl}/api/group-members/${existingMember.id}`,
-              {
-                data: {
-                  Left_date: timestamp,
-                  is_active: false
-                }
-              },
-              {
-                headers: {
-                  'Authorization': `Bearer ${SimpleWhatsAppService.strapiApiToken}`,
-                  'Content-Type': 'application/json'
-                },
-                validateStatus: () => true,
-                timeout: 5000 // 5 segundos de timeout
-              }
-            ).catch(error => {
-              console.error(`Error al actualizar left_date para ${phoneNumber}:`, error);
-            })
-          );
-        }
-      }
-      
-      // Esperar a que terminen todas las actualizaciones de left_date
-      await Promise.all(updateLeftMembersPromises);
-      
-      // Guardar los miembros (en pequeños lotes)
-      const batchSize = 50;
-      for (let i = 0; i < members.length; i += batchSize) {
-        const batch = members.slice(i, i + batchSize);
-        
-        const saveMemberPromises = batch.map(async (member) => {
-          try {
-            const existingMemberInfo = memberMap.get(member.phoneNumber);
-            
-            if (existingMemberInfo) {
-              const needsUpdate = existingMemberInfo.is_active === false || 
-                                 (existingMemberInfo.left_date !== null && existingMemberInfo.left_date !== undefined);
-              
-              if (needsUpdate) {
-                console.log(`Actualizando miembro existente ${member.phoneNumber} (ID: ${existingMemberInfo.id}) en grupo "${groupName}"`);
-                const updateResponse = await axios.put(
-                  `${strapiUrl}/api/group-members/${existingMemberInfo.id}`,
-                  {
-                    data: {
-                      Left_date: null,
-                      is_active: true
-                    }
-                  },
-                  {
-                    headers: {
-                      'Authorization': `Bearer ${SimpleWhatsAppService.strapiApiToken}`,
-                      'Content-Type': 'application/json'
-                    },
-                    validateStatus: () => true,
-                    timeout: 5000 // 5 segundos de timeout
-                  }
-                );
-                
-                if (updateResponse.status >= 400) {
-                  console.error(`Error al actualizar miembro ${member.phoneNumber}: ${updateResponse.status}`);
-                  console.error(updateResponse.data);
-                } else {
-                  console.log(`Miembro ${member.phoneNumber} actualizado correctamente en grupo "${groupName}"`);
-                }
-              } else {
-                console.log(`Miembro ${member.phoneNumber} ya está activo en grupo "${groupName}", no requiere actualización`);
-              }
-            } else {
-              // Es un miembro completamente nuevo
-              console.log(`Creando nuevo miembro ${member.phoneNumber} para grupo ${groupName} (ID: ${groupId})`);
-              
-              let joinDate = timestamp;
-              if (member.joinDate instanceof Date && !isNaN(member.joinDate.getTime())) {
-                joinDate = member.joinDate.toISOString();
-                console.log(`Usando join_date de objeto Date: ${joinDate} para miembro ${member.phoneNumber}`);
-              } else {
-                console.log(`Usando fecha actual como join_date: ${joinDate} para miembro ${member.phoneNumber}`);
-              }
-              
-              const createResponse = await axios.post(
-                `${strapiUrl}/api/group-members`,
-                {
-                  data: {
-                    phone_number: member.phoneNumber,
-                    name: member.name || `Miembro ${member.phoneNumber}`,
-                    is_active: true,
-                    Join_date: joinDate,
-                    left_date: null,
-                    whats_app_group: groupId,
-                    status: 'draft'
-                  }
-                },
-                {
-                  headers: {
-                    'Authorization': `Bearer ${SimpleWhatsAppService.strapiApiToken}`,
-                    'Content-Type': 'application/json'
-                  },
-                  validateStatus: () => true,
-                  timeout: 5000 // 5 segundos de timeout
-                }
-              );
-              
-              if (createResponse.status >= 400) {
-                console.error(`Error al crear miembro ${member.phoneNumber}: ${createResponse.status}`);
-                console.error(createResponse.data);
-              } else {
-                console.log(`Miembro ${member.phoneNumber} creado exitosamente para grupo ${groupName}`);
-              }
-            }
-          } catch (memberError) {
-            console.error(`Error al procesar miembro ${member.phoneNumber}:`, memberError);
-          }
-        });
-        
-        await Promise.all(saveMemberPromises);
-        
-        console.log(`Procesado lote de ${batch.length} miembros (${i + batch.length}/${members.length})`);
-      }
-    } catch (error) {
-      console.error('Error guardando en Strapi:', error);
-      throw error;
-    }
-  }
+      // Construimos la URL de la API
+      const apiUrl = `${strapiUrl}/api/whatsapp-groups`;
 
-  /**
-   * Obtiene métricas de un grupo
-   */
-  public async getGroupMetrics(groupName: string, sinceHours: number = 24): Promise<GroupMetrics> {
-    try {
-      // Reemplazarlo totalmente para usar el repositorio que gestiona los datos de Strapi
-      console.log(`Obteniendo métricas del grupo "${groupName}" (últimas ${sinceHours} horas)...`);
-      
-      // Usar GroupMemberRepository para obtener métricas basadas en Strapi
-      const metrics = await GroupMemberRepository.getGroupMetrics(groupName, sinceHours);
-      
-      console.log(`Métricas obtenidas para grupo "${groupName}": ${metrics.totalMembers} miembros, ${metrics.newMembers.length} nuevos, ${metrics.leftMembers.length} salieron`);
-      
-      return metrics;
-    } catch (error) {
-      console.error(`Error al obtener métricas del grupo "${groupName}":`, error);
-      throw error;
-    }
-  }
+      // Configuramos los headers
+      const headers = {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${strapiToken}`
+      };
 
-  /**
-   * Obtiene el código QR para autenticación
-   */
-  public getQRCode(): string | null {
-    return this.qrCode;
-  }
-
-  /**
-   * Verifica si el cliente está autenticado
-   */
-  public isClientAuthenticated(): boolean {
-    return this.isAuthenticated;
-  }
-
-  /**
-   * Cierra el cliente y libera recursos
-   * Si preserveSession es true, no limpia los archivos de sesión local
-   */
-  public async close(preserveSession: boolean = false): Promise<void> {
-    // Cancelar cierre automático si está activo
-    this.cancelAutoClose();
-    
-    console.log(`[${this.clientId}] Iniciando cierre de cliente WhatsApp`);
-    
-    try {
-      if (preserveSession) {
-        // Cierre suave - mantiene archivos de sesión
-        await this.softClose();
-      } else {
-        // Cierre completo con logout - elimina archivos de sesión
-        await this.logout()
-          .catch(error => {
-            console.error(`[${this.clientId}] Error al hacer logout durante cierre:`, error);
-          });
-      }
-      
-      console.log(`[${this.clientId}] Cierre de cliente completado con éxito`);
-    } catch (error) {
-      console.error(`[${this.clientId}] Error fatal durante cierre de cliente:`, error);
-      throw error;
-    }
-  }
-
-  /**
-   * Cierra suavemente el cliente liberando recursos pero conservando sesión
-   */
-  public async softClose(): Promise<void> {
-    console.log(`[${this.clientId}] Iniciando cierre suave (preservando sesión)...`);
-    
-    try {
-      if (this.client) {
-        try {
-          // No hacer logout, solo destruir el cliente para liberar recursos
-          console.log(`[${this.clientId}] Destruyendo cliente (sin logout)...`);
-          await this.client.destroy()
-            .catch(e => console.error(`[${this.clientId}] Error en client.destroy():`, e));
-        } catch (destroyError) {
-          console.error(`[${this.clientId}] Error durante destroy:`, destroyError);
-        }
-        
-        // Limpiar la referencia del cliente
-        this.client = null;
-      }
-      
-      // Restablecer estado pero mantener la información de autenticación
-      // para que la próxima conexión intente usar la sesión guardada
-      this.isAuthenticated = false;
-      this.qrCode = null;
-      
-      // Emitir evento de cierre suave
-      this.emit('softClose', this.clientId);
-      
-      console.log(`[${this.clientId}] Cierre suave completado con éxito (sesión preservada)`);
-    } catch (error) {
-      console.error(`[${this.clientId}] Error durante cierre suave:`, error);
-      throw error;
-    }
-  }
-
-  /**
-   * Programa el cierre automático del cliente
-   */
-  private scheduleAutoClose(): void {
-    this.cancelAutoClose();
-    
-    // Leer configuración de variables de entorno
-    const autoCloseEnabled = process.env.AUTO_CLOSE_ENABLED !== 'false' && 
-                           process.env.AUTO_CLOSE_AFTER_SCAN !== 'false' && 
-                           process.env.FORCE_AUTO_CLOSE !== 'true';
-    
-    const autoCloseTimeout = parseInt(process.env.AUTO_CLOSE_TIMEOUT || '600000', 10);
-    
-    if (autoCloseEnabled) {
-      console.log(`ℹ️ Cierre automático activado. Se cerrará en ${autoCloseTimeout/60000} minutos de inactividad`);
-      console.log(`   (Las sesiones se conservarán para reconexiones futuras)`);
-      
-      this.autoCloseTimeout = setTimeout(() => {
-        console.log('ℹ️ Cerrando cliente automáticamente por inactividad...');
-        console.log('   Las sesiones se conservarán para reconexiones futuras');
-        this.close(true);
-      }, autoCloseTimeout);
-    } else {
-      console.log('ℹ️ Cierre automático desactivado:');
-      console.log(`   - AUTO_CLOSE_ENABLED: ${process.env.AUTO_CLOSE_ENABLED !== 'false' ? 'Sí' : 'No'}`);
-      console.log(`   - AUTO_CLOSE_AFTER_SCAN: ${process.env.AUTO_CLOSE_AFTER_SCAN !== 'false' ? 'Sí' : 'No'}`);
-      console.log(`   - FORCE_AUTO_CLOSE: ${process.env.FORCE_AUTO_CLOSE === 'true' ? 'Sí' : 'No'}`);
-    }
-  }
-
-  /**
-   * Cancela el cierre automático programado
-   */
-  private cancelAutoClose(): void {
-    if (this.autoCloseTimeout) {
-      clearTimeout(this.autoCloseTimeout);
-      this.autoCloseTimeout = null;
-      console.log('Cierre automático cancelado');
-    }
-  }
-
-  /**
-   * Configura los eventos del cliente
-   */
-  private setupEvents(): void {
-    if (!this.client) return;
-    
-    this.client.on('qr', (qr) => {
-      console.log('Nuevo código QR generado');
-      this.qrCode = qr;
-      this.isAuthenticated = false;
-      qrcode.generate(qr, { small: true });
-      this.emit('qr', qr);
-    });
-    
-    this.client.on('authenticated', () => {
-      console.log('Cliente autenticado correctamente');
-      this.isAuthenticated = true;
-      this.qrCode = null;
-      this.authError = null;
-      this.clearAuthTimeout();
-      this.emit('authenticated');
-    });
-    
-    this.client.on('auth_failure', (error) => {
-      console.error('Error de autenticación:', error);
-      this.authError = error?.toString() || 'Error de autenticación';
-      this.isAuthenticated = false;
-      this.emit('auth_failure', this.authError);
-    });
-    
-    this.client.on('ready', () => {
-      console.log('Cliente listo para usar');
-      this.isAuthenticated = true;
-      this.authError = null;
-      this.emit('ready');
-    });
-    
-    this.client.on('disconnected', (reason) => {
-      console.log('Cliente desconectado:', reason);
-      this.isAuthenticated = false;
-      
-      // Si la razón es LOGOUT, intentar reconectar
-      if (reason === 'LOGOUT') {
-        console.log('Reconectando después de LOGOUT...');
-        this.initialize(false, 3, 5000).catch(error => {
-          console.error('Error al reconectar:', error);
-        });
-      }
-      
-      this.emit('disconnected', reason);
-    });
-  }
-
-  /**
-   * Limpia los datos de sesión local si es necesario
-   */
-  private async cleanLocalSessionIfNeeded(): Promise<void> {
-    try {
-      const sessionDir = `${this.clientPath}/session-${this.clientId}`;
-      const tempDir = `${this.clientPath}/RemoteAuth-${this.clientId}`;
-      
-      // Si existe RemoteAuth y también existe la sesión normal, eliminar RemoteAuth
-      if (fs.existsSync(tempDir) && fs.existsSync(sessionDir)) {
-        console.log(`Se encontraron múltiples sesiones. Eliminando RemoteAuth antiguo...`);
-        await this.deleteDir(tempDir);
-      }
-      
-      // No hacemos más comprobaciones aquí
-      // La funcionalidad de la sesión se verificará durante el proceso de inicialización
-    } catch (error) {
-      console.error('Error al verificar sesiones locales:', error);
-    }
-  }
-
-  /**
-   * Elimina un directorio de forma asíncrona con manejo de errores
-   * @param dirPath Ruta del directorio a eliminar
-   */
-  private async deleteDir(dirPath: string): Promise<void> {
-    if (!fs.existsSync(dirPath)) {
-      console.log(`El directorio ${dirPath} no existe, omitiendo...`);
-      return;
-    }
-    
-    const maxRetries = 3;
-    const retryDelay = 2000; // 2 segundos
-    
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        // Esperar antes de cada intento
-        if (attempt > 1) {
-          console.log(`Intento ${attempt}/${maxRetries} de eliminar directorio ${dirPath}...`);
-          await new Promise(resolve => setTimeout(resolve, retryDelay));
-        }
-        
-        // Intentar eliminar con fs.promises.rm
-        await fs.promises.rm(dirPath, { 
-          recursive: true, 
-          force: true,
-          maxRetries: 3
-        });
-        
-        console.log(`Directorio ${dirPath} eliminado exitosamente`);
-        return;
-      } catch (error: any) {
-        console.error(`Error en intento ${attempt}/${maxRetries} al eliminar directorio:`, error);
-        
-        // Si es el último intento, intentar con comandos del sistema
-        if (attempt === maxRetries) {
-          try {
-            if (process.platform === 'win32') {
-              // En Windows, usar rd /s /q con timeout
-              console.log(`Intentando eliminar ${dirPath} con comando 'rd'...`);
-              await new Promise((resolve, reject) => {
-                exec(`timeout /t 2 && rd /s /q "${dirPath}"`, (error, stdout, stderr) => {
-                  if (error) {
-                    console.error(`Error en comando rd:`, stderr);
-                    resolve(null);
-                    return;
-                  }
-                  resolve(stdout);
-                });
-              });
-            } else {
-              // En Unix/Linux/Mac, usar rm -rf
-              console.log(`Intentando eliminar ${dirPath} con comando 'rm -rf'...`);
-              await new Promise((resolve, reject) => {
-                exec(`sleep 2 && rm -rf "${dirPath}"`, (error, stdout, stderr) => {
-                  if (error) {
-                    console.error(`Error en comando rm:`, stderr);
-                    resolve(null);
-                    return;
-                  }
-                  resolve(stdout);
-                });
-              });
-            }
-          } catch (cmdError) {
-            console.error(`Error al eliminar directorio con comando del sistema:`, cmdError);
-            // No lanzar error para permitir continuar
-            console.log(`Se ignorará el error y continuará...`);
-          }
-        }
-      }
-    }
-  }
-
-  /**
-   * Cierra la sesión de WhatsApp y limpia recursos
-   */
-  public async logout(): Promise<void> {
-    console.log(`[${this.clientId}] Iniciando proceso de logout`);
-    
-    try {
-      if (this.client) {
-        try {
-          // Intentar logout normal primero
-          console.log(`[${this.clientId}] Ejecutando client.logout()`);
-          await this.client.logout()
-            .catch(e => console.error(`[${this.clientId}] Error en client.logout():`, e));
-        } catch (logoutError) {
-          console.error(`[${this.clientId}] Error durante logout:`, logoutError);
-        }
-        
-        try {
-          // Destruir cliente para liberar recursos
-          console.log(`[${this.clientId}] Destruyendo cliente`);
-          await this.client.destroy()
-            .catch(e => console.error(`[${this.clientId}] Error en client.destroy():`, e));
-        } catch (destroyError) {
-          console.error(`[${this.clientId}] Error durante destroy:`, destroyError);
-        }
-        
-        // Limpiar la referencia del cliente
-        this.client = null;
-      }
-      
-      // Restablecer estado
-      this.isAuthenticated = false;
-      this.qrCode = null;
-      
-      // Emitir evento de logout
-      this.emit('logout', this.clientId);
-      
-      // Esperar 2 segundos para asegurar que los archivos no estén en uso
-      console.log(`[${this.clientId}] Esperando 2 segundos antes de limpiar archivos de sesión...`);
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      // Limpiar archivos de sesión local
-      await this.cleanLocalSession();
-      
-      console.log(`[${this.clientId}] Proceso de logout completado con éxito`);
-    } catch (error) {
-      console.error(`[${this.clientId}] Error fatal durante el proceso de logout:`, error);
-      throw error;
-    }
-  }
-  
-  /**
-   * Limpia los archivos de sesión local
-   * @returns Promise que resuelve cuando se completa la limpieza
-   */
-  public async cleanLocalSession(): Promise<void> {
-    console.log(`[${this.clientId}] Iniciando limpieza de archivos de sesión local`);
-    
-    // Directorios a limpiar
-    const directories = [
-      // Directorio RemoteAuth (sesiones antiguas)
-      `${this.clientPath}/RemoteAuth-${this.clientId}`,
-      // Directorio LocalAuth
-      `${this.clientPath}/session-${this.clientId}`
-    ];
-    
-    for (const dir of directories) {
-      try {
-        console.log(`[${this.clientId}] Eliminando directorio: ${dir}`);
-        await this.deleteDir(dir);
-        console.log(`[${this.clientId}] Directorio eliminado: ${dir}`);
-      } catch (error) {
-        console.error(`[${this.clientId}] Error al eliminar directorio ${dir}:`, error);
-        
-        // Intentar nuevamente después de un tiempo
-        console.log(`[${this.clientId}] Esperando 5 segundos para reintentar eliminación...`);
-        await new Promise(resolve => setTimeout(resolve, 5000));
-        
-        try {
-          console.log(`[${this.clientId}] Reintentando eliminar directorio: ${dir}`);
-          await this.deleteDir(dir);
-          console.log(`[${this.clientId}] Directorio eliminado en segundo intento: ${dir}`);
-        } catch (retryError) {
-          console.error(`[${this.clientId}] Error al reintentar eliminación de ${dir}:`, retryError);
-          // No lanzar error, continuar con los demás directorios
-        }
-      }
-    }
-    
-    console.log(`[${this.clientId}] Limpieza de archivos de sesión local completada`);
-  }
-
-  /**
-   * Elimina un directorio recursivamente
-   * @deprecated Usar la versión asíncrona deleteDir
-   */
-  private synchronousDeleteDir(dir: string): void {
-    if (fs.existsSync(dir)) {
-      fs.readdirSync(dir).forEach(file => {
-        const curPath = `${dir}/${file}`;
-        if (fs.lstatSync(curPath).isDirectory()) {
-          this.synchronousDeleteDir(curPath);
-        } else {
-          fs.unlinkSync(curPath);
-        }
+      // Realizamos la solicitud a Strapi
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          data: groupInfo
+        })
       });
-      fs.rmdirSync(dir);
-    }
-  }
 
-  /**
-   * Indica si el servicio está actualmente escaneando grupos
-   */
-  public isScanning(): boolean {
-    return this.scanning;
-  }
-  
-  /**
-   * Obtiene el progreso actual del escaneo
-   */
-  public getScanProgress(): {
-    total: number;
-    completed: number;
-    successful: number;
-    failed: number;
-    failedGroups: string[];
-    percent: number;
-  } {
-    const percent = this.scanProgressData.total > 0 
-      ? Math.round((this.scanProgressData.completed / this.scanProgressData.total) * 100) 
-      : 0;
-      
-    return {
-      ...this.scanProgressData,
-      percent
-    };
-  }
+      // Verificamos si la respuesta fue exitosa
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Error al guardar en Strapi: ${response.status} ${response.statusText} - ${errorText}`);
+      }
 
-  /**
-   * Obtiene el error de autenticación si existe
-   * @returns El mensaje de error o null si no hay error
-   */
-  public getAuthError(): string | null {
-    return this.authError;
-  }
-
-  /**
-   * Configura un temporizador para cerrar el cliente si no se autentica en el tiempo especificado
-   */
-  private setAuthTimeout(): void {
-    // Limpiar cualquier temporizador existente primero
-    this.clearAuthTimeout();
-    
-    // Obtener configuración de timeouts desde variables de entorno
-    const authTimeoutMinutes = parseInt(process.env.AUTH_TIMEOUT_MINUTES || '10', 10);
-    const autoCloseTimeout = parseInt(process.env.AUTO_CLOSE_TIMEOUT || '600000', 10); // 10 minutos por defecto
-    const autoCloseEnabled = process.env.AUTO_CLOSE_ENABLED !== 'false' && 
-                           process.env.AUTO_CLOSE_AFTER_SCAN !== 'false' && 
-                           process.env.FORCE_AUTO_CLOSE !== 'true';
-    
-    const authTimeout = authTimeoutMinutes * 60 * 1000; // Convertir a milisegundos
-    
-    console.log('⏱️ Configuración de timeouts:');
-    console.log(`   - AUTH_TIMEOUT_MINUTES: ${authTimeoutMinutes} minutos`);
-    console.log(`   - AUTO_CLOSE_TIMEOUT: ${autoCloseTimeout/60000} minutos`);
-    console.log(`   - AUTO_CLOSE_ENABLED: ${autoCloseEnabled ? 'Sí' : 'No'}`);
-    console.log(`   - AUTO_CLOSE_AFTER_SCAN: ${process.env.AUTO_CLOSE_AFTER_SCAN !== 'false' ? 'Sí' : 'No'}`);
-    console.log(`   - FORCE_AUTO_CLOSE: ${process.env.FORCE_AUTO_CLOSE === 'true' ? 'Sí' : 'No'}`);
-    
-    // Crear nuevo temporizador
-    this.authTimeoutTimer = setTimeout(() => {
-      console.log('⚠️ Temporizador de autenticación expirado');
-      
-      if (!this.isAuthenticated) {
-        console.log('🔒 No se autenticó en el tiempo esperado, cerrando cliente para liberar recursos...');
-        this.close(true)
-          .then(() => {
-            console.log('Cliente cerrado exitosamente por timeout de autenticación');
-            this.emit('auth_timeout');
-          })
-          .catch(error => {
-            console.error('Error al cerrar cliente por timeout:', error);
-            this.emit('auth_timeout_error', error);
-          });
-      }
-    }, authTimeout);
-    
-    // Añadir un temporizador para mostrar advertencias cada minuto
-    let remainingMinutes = authTimeoutMinutes;
-    const warningInterval = setInterval(() => {
-      remainingMinutes--;
-      if (remainingMinutes > 0) {
-        console.log(`⏰ Tiempo restante para autenticación: ${remainingMinutes} minutos`);
-        this.emit('auth_timeout_warning', remainingMinutes);
-      }
-      
-      // Limpiar el intervalo si el cliente se autentica o se cierra
-      if (this.isAuthenticated || !this.authTimeoutTimer) {
-        clearInterval(warningInterval);
-      }
-    }, 60 * 1000); // Cada minuto
-  }
-  
-  /**
-   * Limpia el temporizador de autenticación
-   */
-  private clearAuthTimeout(): void {
-    if (this.authTimeoutTimer) {
-      clearTimeout(this.authTimeoutTimer);
-      this.authTimeoutTimer = null;
-      console.log('Temporizador de autenticación cancelado');
+      // Parseamos la respuesta
+      const data = await response.json();
+      console.log(`Grupo ${groupInfo.name || 'desconocido'} guardado en Strapi correctamente`);
+      return data;
+    } catch (error) {
+      console.error('Error guardando grupo en Strapi:', error);
+      throw error;
     }
   }
 }

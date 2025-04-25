@@ -68,33 +68,10 @@ class SimpleWhatsAppController {
         return;
       }
       
-      // Verificar si existe un directorio de sesión previa
-      const sessionDir = './.wwebjs_auth/session-whatsapp-api';
-      const sessionExists = fs.existsSync(sessionDir);
-      console.log(`Verificando existencia de sesión en ${sessionDir}: ${sessionExists}`);
-      
       // Inicializar cliente WhatsApp
       console.log('Inicializando cliente WhatsApp');
       
-      const cleanFailedSession = req.query.forceNew === 'true' || false;
-      console.log(`Configurado para limpiar sesión si falla: ${cleanFailedSession}`);
-      
-      await SimpleWhatsAppService.initialize(cleanFailedSession);
-      
-      // Si hay una sesión previa, esperar brevemente para dar tiempo a la autenticación automática
-      if (sessionExists) {
-        console.log('Sesión existente detectada, esperando 5 segundos para autenticación automática');
-        await new Promise(resolve => setTimeout(resolve, 5000));
-        
-        if (SimpleWhatsAppService.isClientAuthenticated()) {
-          console.log('Cliente autenticado automáticamente después de la espera');
-          res.json({
-            status: 'AUTHENTICATED',
-            message: 'Cliente autenticado automáticamente'
-          });
-          return;
-        }
-      }
+      await SimpleWhatsAppService.initialize();
       
       // Función para esperar el QR sin timeout
       const waitForQR = async (): Promise<string | null> => {
@@ -395,8 +372,7 @@ class SimpleWhatsAppController {
    */
   async logout(req: Request, res: Response): Promise<void> {
     try {
-      // Uso close(false) para asegurar que se eliminen los archivos de sesión
-      await SimpleWhatsAppService.close(false);
+      await SimpleWhatsAppService.close();
       
       res.status(200).json({
         success: true,
@@ -412,36 +388,17 @@ class SimpleWhatsAppController {
 
   /**
    * Limpia recursos y reinicia el sistema
-   * Esta función es útil cuando el sistema está en un estado inconsistente
    */
   async cleanup(req: Request, res: Response): Promise<void> {
     try {
       console.log('Iniciando limpieza de recursos...');
       
-      // Forzar cierre con forceClean = true para eliminar archivos si es necesario
-      const forceClean = req.query.force === 'true';
+      await SimpleWhatsAppService.close();
       
-      if (forceClean) {
-        console.log('Limpieza forzada solicitada, se eliminarán archivos de sesión');
-        // Cerrar cliente y eliminar archivos de sesión
-        await SimpleWhatsAppService.close(false);
-        
-        // Limpiar sesión localmente
-        await SimpleWhatsAppService.cleanLocalSession();
-        
-        res.status(200).json({
-          success: true,
-          message: 'Recursos liberados y sesión eliminada correctamente'
-        });
-      } else {
-        // Solo cierre suave, conservando sesión
-        await SimpleWhatsAppService.close(true);
-        
-        res.status(200).json({
-          success: true,
-          message: 'Recursos liberados correctamente (sesión preservada)'
-        });
-      }
+      res.status(200).json({
+        success: true,
+        message: 'Recursos liberados correctamente'
+      });
     } catch (error) {
       console.error('Error durante la limpieza de recursos:', error);
       res.status(500).json({
@@ -512,15 +469,9 @@ class SimpleWhatsAppController {
 
   /**
    * Obtiene estado detallado para integración API-a-API
-   * Este método está optimizado para minimizar uso de QR
    */
   async getApiStatus(req: Request, res: Response): Promise<void> {
     try {
-      // Verificar si existe un directorio de sesión
-      const sessionDir = './.wwebjs_auth/session-whatsapp-api';
-      const sessionExists = fs.existsSync(sessionDir);
-      const sessionValid = sessionExists && fs.readdirSync(sessionDir).length > 0;
-      
       // Verificar si ya está autenticado
       const isAuthenticated = SimpleWhatsAppService.isClientAuthenticated();
       const qrCode = SimpleWhatsAppService.getQRCode();
@@ -534,8 +485,6 @@ class SimpleWhatsAppController {
         status = 'NEED_SCAN';
       } else if (authError) {
         status = 'AUTH_ERROR';
-      } else if (sessionValid) {
-        status = 'SESSION_AVAILABLE';
       } else {
         status = 'NO_SESSION';
       }
@@ -547,10 +496,6 @@ class SimpleWhatsAppController {
       switch (status) {
         case 'AUTHENTICATED':
           nextAction = 'CONTINUE';
-          requiresHuman = false;
-          break;
-        case 'SESSION_AVAILABLE':
-          nextAction = 'INITIALIZE';
           requiresHuman = false;
           break;
         case 'NEED_SCAN':
@@ -572,8 +517,6 @@ class SimpleWhatsAppController {
         data: {
           status,
           authenticated: isAuthenticated,
-          sessionExists: sessionExists,
-          sessionValid: sessionValid,
           qrAvailable: !!qrCode,
           qrCode: qrCode, // Solo presente si hay QR disponible
           error: authError,
