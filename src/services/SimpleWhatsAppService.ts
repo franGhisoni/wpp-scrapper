@@ -440,7 +440,28 @@ class SimpleWhatsAppService extends EventEmitter {
               
               console.log(`[${this.clientId}] Grupo encontrado: ${foundGroup.name}. Obteniendo participantes...`);
               
-              const participants = await foundGroup.participants;
+              // Intentar obtener participantes con reintentos
+              let participants = null;
+              let retryCount = 0;
+              const maxRetries = 3;
+              
+              while (!participants && retryCount < maxRetries) {
+                try {
+                  participants = await foundGroup.participants;
+                } catch (error) {
+                  retryCount++;
+                  if (retryCount < maxRetries) {
+                    console.log(`[${this.clientId}] Reintentando obtener participantes (intento ${retryCount}/${maxRetries})...`);
+                    await new Promise(resolve => setTimeout(resolve, 2000 * retryCount));
+                  } else {
+                    throw error;
+                  }
+                }
+              }
+              
+              if (!participants) {
+                throw new Error('No se pudieron obtener los participantes después de varios intentos');
+              }
               
               // Convertir a formato GroupMember
               const members = participants.map(p => {
@@ -451,9 +472,9 @@ class SimpleWhatsAppService extends EventEmitter {
                   name: `Participante ${p.id.user}`,
                   isActive: true,
                   groupName: foundGroup.name,
-                  joinDate: joinDate, // Asegurarse de que sea un objeto Date válido
+                  joinDate: joinDate,
                   leftDate: null,
-                  id: 0, // Placeholder ID, will be assigned by Strapi
+                  id: 0,
                   createdAt: new Date(),
                   updatedAt: new Date()
                 } as GroupMember;
@@ -464,16 +485,30 @@ class SimpleWhatsAppService extends EventEmitter {
               // Guardar miembros actuales para métricas futuras
               this.previousMembers[foundGroup.name] = [...members];
               
-              // Guardar en Strapi
-              try {
-                if (!SimpleWhatsAppService.strapiApiToken) {
-                  console.log(`[${this.clientId}] ⚠️ No se puede guardar en Strapi: STRAPI_API_TOKEN no configurado`);
-                } else {
-                  await SimpleWhatsAppService.saveGroupToStrapi(foundGroup.name, members);
-                  console.log(`[${this.clientId}] ✅ Guardado en Strapi: ${foundGroup.name} con ${members.length} miembros`);
+              // Guardar en Strapi con reintentos
+              let strapiSuccess = false;
+              retryCount = 0;
+              
+              while (!strapiSuccess && retryCount < maxRetries) {
+                try {
+                  if (!SimpleWhatsAppService.strapiApiToken) {
+                    console.log(`[${this.clientId}] ⚠️ No se puede guardar en Strapi: STRAPI_API_TOKEN no configurado`);
+                    strapiSuccess = true; // Considerar como éxito si no hay token
+                  } else {
+                    await SimpleWhatsAppService.saveGroupToStrapi(foundGroup.name, members);
+                    console.log(`[${this.clientId}] ✅ Guardado en Strapi: ${foundGroup.name} con ${members.length} miembros`);
+                    strapiSuccess = true;
+                  }
+                } catch (strapiError) {
+                  retryCount++;
+                  if (retryCount < maxRetries) {
+                    console.log(`[${this.clientId}] Reintentando guardar en Strapi (intento ${retryCount}/${maxRetries})...`);
+                    await new Promise(resolve => setTimeout(resolve, 2000 * retryCount));
+                  } else {
+                    console.error(`[${this.clientId}] ⚠️ Error al guardar en Strapi después de ${maxRetries} intentos:`, strapiError);
+                    // No lanzar error, continuar con el proceso
+                  }
                 }
-              } catch (strapiError) {
-                console.error(`[${this.clientId}] ⚠️ Error al guardar en Strapi:`, strapiError);
               }
               
               clearTimeout(timer);
@@ -559,17 +594,23 @@ class SimpleWhatsAppService extends EventEmitter {
       // Forzar URL IPv4
       const strapiUrl = SimpleWhatsAppService.strapiUrl.replace('localhost', '127.0.0.1');
       
+      // Verificar si la URL de Strapi es válida
+      if (!strapiUrl.startsWith('http://') && !strapiUrl.startsWith('https://')) {
+        throw new Error(`URL de Strapi inválida: ${strapiUrl}`);
+      }
+      
       try {
         // Verificar si Strapi está funcionando
         const healthCheck = await axios.get(`${strapiUrl}/api/ping`, {
           headers: { 'Authorization': `Bearer ${SimpleWhatsAppService.strapiApiToken}` },
-          validateStatus: () => true
+          validateStatus: () => true,
+          timeout: 5000 // 5 segundos de timeout
         });
         
         console.log(`Estado de Strapi: ${healthCheck.status} - ${healthCheck.statusText}`);
         
         if (healthCheck.status >= 400) {
-          throw new Error(`Error conectando con Strapi (${healthCheck.status})`);
+          throw new Error(`Error conectando con Strapi (${healthCheck.status}): ${healthCheck.statusText}`);
         }
       } catch (pingError) {
         console.error('Error verificando Strapi:', pingError);
@@ -592,7 +633,8 @@ class SimpleWhatsAppService extends EventEmitter {
               'Authorization': `Bearer ${SimpleWhatsAppService.strapiApiToken}`,
               'Content-Type': 'application/json'
             },
-            validateStatus: () => true
+            validateStatus: () => true,
+            timeout: 5000 // 5 segundos de timeout
           }
         );
         
@@ -622,7 +664,8 @@ class SimpleWhatsAppService extends EventEmitter {
                 'Authorization': `Bearer ${SimpleWhatsAppService.strapiApiToken}`,
                 'Content-Type': 'application/json'
               },
-              validateStatus: () => true
+              validateStatus: () => true,
+              timeout: 5000 // 5 segundos de timeout
             }
           );
           
@@ -650,7 +693,8 @@ class SimpleWhatsAppService extends EventEmitter {
                 'Authorization': `Bearer ${SimpleWhatsAppService.strapiApiToken}`,
                 'Content-Type': 'application/json'
               },
-              validateStatus: () => true
+              validateStatus: () => true,
+              timeout: 5000 // 5 segundos de timeout
             }
           );
           
@@ -693,7 +737,8 @@ class SimpleWhatsAppService extends EventEmitter {
               'Authorization': `Bearer ${SimpleWhatsAppService.strapiApiToken}`,
               'Content-Type': 'application/json'
             },
-            validateStatus: () => true
+            validateStatus: () => true,
+            timeout: 5000 // 5 segundos de timeout
           }
         );
         
@@ -744,7 +789,8 @@ class SimpleWhatsAppService extends EventEmitter {
                   'Authorization': `Bearer ${SimpleWhatsAppService.strapiApiToken}`,
                   'Content-Type': 'application/json'
                 },
-                validateStatus: () => true
+                validateStatus: () => true,
+                timeout: 5000 // 5 segundos de timeout
               }
             ).catch(error => {
               console.error(`Error al actualizar left_date para ${phoneNumber}:`, error);
@@ -784,7 +830,8 @@ class SimpleWhatsAppService extends EventEmitter {
                       'Authorization': `Bearer ${SimpleWhatsAppService.strapiApiToken}`,
                       'Content-Type': 'application/json'
                     },
-                    validateStatus: () => true
+                    validateStatus: () => true,
+                    timeout: 5000 // 5 segundos de timeout
                   }
                 );
                 
@@ -798,102 +845,45 @@ class SimpleWhatsAppService extends EventEmitter {
                 console.log(`Miembro ${member.phoneNumber} ya está activo en grupo "${groupName}", no requiere actualización`);
               }
             } else {
-              // Verificar si ya existe en este grupo
-              console.log(`Verificando si ya existe miembro ${member.phoneNumber} en grupo ${groupName} (ID: ${groupId})...`);
+              // Es un miembro completamente nuevo
+              console.log(`Creando nuevo miembro ${member.phoneNumber} para grupo ${groupName} (ID: ${groupId})`);
               
-              const existingMembersInGroup = await axios.get(
+              let joinDate = timestamp;
+              if (member.joinDate instanceof Date && !isNaN(member.joinDate.getTime())) {
+                joinDate = member.joinDate.toISOString();
+                console.log(`Usando join_date de objeto Date: ${joinDate} para miembro ${member.phoneNumber}`);
+              } else {
+                console.log(`Usando fecha actual como join_date: ${joinDate} para miembro ${member.phoneNumber}`);
+              }
+              
+              const createResponse = await axios.post(
                 `${strapiUrl}/api/group-members`,
                 {
-                  params: {
-                    'filters[phone_number][$eq]': member.phoneNumber,
-                    'filters[whats_app_group][id][$eq]': groupId
-                  },
+                  data: {
+                    phone_number: member.phoneNumber,
+                    name: member.name || `Miembro ${member.phoneNumber}`,
+                    is_active: true,
+                    Join_date: joinDate,
+                    left_date: null,
+                    whats_app_group: groupId,
+                    status: 'draft'
+                  }
+                },
+                {
                   headers: {
                     'Authorization': `Bearer ${SimpleWhatsAppService.strapiApiToken}`,
                     'Content-Type': 'application/json'
                   },
-                  validateStatus: () => true
+                  validateStatus: () => true,
+                  timeout: 5000 // 5 segundos de timeout
                 }
               );
               
-              if (existingMembersInGroup.status === 200 && existingMembersInGroup.data?.data?.length > 0) {
-                const existingMember = existingMembersInGroup.data.data[0];
-                const isActive = existingMember.attributes.is_active === true;
-                const hasLeftDate = existingMember.attributes.Left_date !== null && 
-                                    existingMember.attributes.Left_date !== undefined;
-                
-                const needsUpdate = !isActive || hasLeftDate;
-                
-                if (needsUpdate) {
-                  const existingMemberId = existingMember.id;
-                  console.log(`Miembro ${member.phoneNumber} ya existe en este grupo (ID: ${existingMemberId}), actualizando estado...`);
-                  
-                  const updateResponse = await axios.put(
-                    `${strapiUrl}/api/group-members/${existingMemberId}`,
-                    {
-                      data: {
-                        Left_date: null,
-                        is_active: true
-                      }
-                    },
-                    {
-                      headers: {
-                        'Authorization': `Bearer ${SimpleWhatsAppService.strapiApiToken}`,
-                        'Content-Type': 'application/json'
-                      },
-                      validateStatus: () => true
-                    }
-                  );
-                  
-                  if (updateResponse.status >= 400) {
-                    console.error(`Error al actualizar miembro ${member.phoneNumber} en grupo: ${updateResponse.status}`);
-                    console.error(updateResponse.data);
-                  } else {
-                    console.log(`Miembro ${member.phoneNumber} actualizado correctamente en grupo ${groupName}`);
-                  }
-                } else {
-                  console.log(`Miembro ${member.phoneNumber} ya está activo en este grupo, no requiere actualización`);
-                }
+              if (createResponse.status >= 400) {
+                console.error(`Error al crear miembro ${member.phoneNumber}: ${createResponse.status}`);
+                console.error(createResponse.data);
               } else {
-                // Es un miembro completamente nuevo
-                console.log(`Creando nuevo miembro ${member.phoneNumber} para grupo ${groupName} (ID: ${groupId})`);
-                
-                let joinDate = timestamp;
-                if (member.joinDate instanceof Date && !isNaN(member.joinDate.getTime())) {
-                  joinDate = member.joinDate.toISOString();
-                  console.log(`Usando join_date de objeto Date: ${joinDate} para miembro ${member.phoneNumber}`);
-                } else {
-                  console.log(`Usando fecha actual como join_date: ${joinDate} para miembro ${member.phoneNumber}`);
-                }
-                
-                const createResponse = await axios.post(
-                  `${strapiUrl}/api/group-members`,
-                  {
-                    data: {
-                      phone_number: member.phoneNumber,
-                      name: member.name || `Miembro ${member.phoneNumber}`,
-                      is_active: true,
-                      Join_date: joinDate,
-                      left_date: null,
-                      whats_app_group: groupId,
-                      status: 'draft'
-                    }
-                  },
-                  {
-                    headers: {
-                      'Authorization': `Bearer ${SimpleWhatsAppService.strapiApiToken}`,
-                      'Content-Type': 'application/json'
-                    },
-                    validateStatus: () => true
-                  }
-                );
-                
-                if (createResponse.status >= 400) {
-                  console.error(`Error al crear miembro ${member.phoneNumber}: ${createResponse.status}`);
-                  console.error(createResponse.data);
-                } else {
-                  console.log(`Miembro ${member.phoneNumber} creado exitosamente para grupo ${groupName}`);
-                }
+                console.log(`Miembro ${member.phoneNumber} creado exitosamente para grupo ${groupName}`);
               }
             }
           } catch (memberError) {
@@ -1016,12 +1006,11 @@ class SimpleWhatsAppService extends EventEmitter {
   private scheduleAutoClose(): void {
     this.cancelAutoClose();
     
-    // Leer configuración de variables de entorno con compatibilidad hacia atrás
+    // Leer configuración de variables de entorno
     const autoCloseEnabled = process.env.AUTO_CLOSE_ENABLED !== 'false' && 
                            process.env.AUTO_CLOSE_AFTER_SCAN !== 'false' && 
-                           process.env.FORCE_AUTO_CLOSE !== 'true'; // Por defecto true
+                           process.env.FORCE_AUTO_CLOSE !== 'true';
     
-    // Usar AUTO_CLOSE_TIMEOUT si está definido, sino usar 10 minutos por defecto
     const autoCloseTimeout = parseInt(process.env.AUTO_CLOSE_TIMEOUT || '600000', 10);
     
     if (autoCloseEnabled) {
@@ -1034,7 +1023,10 @@ class SimpleWhatsAppService extends EventEmitter {
         this.close(true);
       }, autoCloseTimeout);
     } else {
-      console.log('ℹ️ Cierre automático desactivado (AUTO_CLOSE_ENABLED=false o AUTO_CLOSE_AFTER_SCAN=false)');
+      console.log('ℹ️ Cierre automático desactivado:');
+      console.log(`   - AUTO_CLOSE_ENABLED: ${process.env.AUTO_CLOSE_ENABLED !== 'false' ? 'Sí' : 'No'}`);
+      console.log(`   - AUTO_CLOSE_AFTER_SCAN: ${process.env.AUTO_CLOSE_AFTER_SCAN !== 'false' ? 'Sí' : 'No'}`);
+      console.log(`   - FORCE_AUTO_CLOSE: ${process.env.FORCE_AUTO_CLOSE === 'true' ? 'Sí' : 'No'}`);
     }
   }
 
@@ -1099,19 +1091,6 @@ class SimpleWhatsAppService extends EventEmitter {
       }
       
       this.emit('disconnected', reason);
-    });
-    
-    // Añadir evento para detectar cuando la sesión no es válida
-    this.client.on('loading_screen', () => {
-      console.log('Pantalla de carga detectada - verificando estado de sesión...');
-      // Aumentar el tiempo de espera a 30 segundos para dar más tiempo a la sesión
-      setTimeout(() => {
-        if (!this.isAuthenticated) {
-          console.log('Sesión no válida detectada - se requerirá nuevo QR');
-          this.isAuthenticated = false;
-          this.emit('session_invalid');
-        }
-      }, 30000); // 30 segundos
     });
   }
 
@@ -1211,7 +1190,6 @@ class SimpleWhatsAppService extends EventEmitter {
 
   /**
    * Cierra la sesión de WhatsApp y limpia recursos
-   * @returns Promise que resuelve cuando se completa el proceso de logout
    */
   public async logout(): Promise<void> {
     console.log(`[${this.clientId}] Iniciando proceso de logout`);
@@ -1363,12 +1341,21 @@ class SimpleWhatsAppService extends EventEmitter {
     // Limpiar cualquier temporizador existente primero
     this.clearAuthTimeout();
     
-    // Obtener el tiempo de espera de las variables de entorno o usar 5 minutos por defecto
-    const authTimeoutMinutes = parseInt(process.env.AUTH_TIMEOUT_MINUTES || '5', 10);
+    // Obtener configuración de timeouts desde variables de entorno
+    const authTimeoutMinutes = parseInt(process.env.AUTH_TIMEOUT_MINUTES || '10', 10);
+    const autoCloseTimeout = parseInt(process.env.AUTO_CLOSE_TIMEOUT || '600000', 10); // 10 minutos por defecto
+    const autoCloseEnabled = process.env.AUTO_CLOSE_ENABLED !== 'false' && 
+                           process.env.AUTO_CLOSE_AFTER_SCAN !== 'false' && 
+                           process.env.FORCE_AUTO_CLOSE !== 'true';
+    
     const authTimeout = authTimeoutMinutes * 60 * 1000; // Convertir a milisegundos
     
-    console.log(`⏱️ Configurando temporizador de autenticación: ${authTimeoutMinutes} minutos`);
-    console.log(`   (Puedes ajustar este tiempo con la variable de entorno AUTH_TIMEOUT_MINUTES)`);
+    console.log('⏱️ Configuración de timeouts:');
+    console.log(`   - AUTH_TIMEOUT_MINUTES: ${authTimeoutMinutes} minutos`);
+    console.log(`   - AUTO_CLOSE_TIMEOUT: ${autoCloseTimeout/60000} minutos`);
+    console.log(`   - AUTO_CLOSE_ENABLED: ${autoCloseEnabled ? 'Sí' : 'No'}`);
+    console.log(`   - AUTO_CLOSE_AFTER_SCAN: ${process.env.AUTO_CLOSE_AFTER_SCAN !== 'false' ? 'Sí' : 'No'}`);
+    console.log(`   - FORCE_AUTO_CLOSE: ${process.env.FORCE_AUTO_CLOSE === 'true' ? 'Sí' : 'No'}`);
     
     // Crear nuevo temporizador
     this.authTimeoutTimer = setTimeout(() => {
@@ -1377,8 +1364,14 @@ class SimpleWhatsAppService extends EventEmitter {
       if (!this.isAuthenticated) {
         console.log('🔒 No se autenticó en el tiempo esperado, cerrando cliente para liberar recursos...');
         this.close(true)
-          .then(() => console.log('Cliente cerrado exitosamente por timeout de autenticación'))
-          .catch(error => console.error('Error al cerrar cliente por timeout:', error));
+          .then(() => {
+            console.log('Cliente cerrado exitosamente por timeout de autenticación');
+            this.emit('auth_timeout');
+          })
+          .catch(error => {
+            console.error('Error al cerrar cliente por timeout:', error);
+            this.emit('auth_timeout_error', error);
+          });
       }
     }, authTimeout);
     
@@ -1388,6 +1381,7 @@ class SimpleWhatsAppService extends EventEmitter {
       remainingMinutes--;
       if (remainingMinutes > 0) {
         console.log(`⏰ Tiempo restante para autenticación: ${remainingMinutes} minutos`);
+        this.emit('auth_timeout_warning', remainingMinutes);
       }
       
       // Limpiar el intervalo si el cliente se autentica o se cierra
