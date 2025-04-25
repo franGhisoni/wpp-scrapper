@@ -2,32 +2,48 @@
  * Simple console-based logger
  */
 const logger = {
-  info: (contextOrMessage: any, messageOrEmpty?: string) => {
-    if (messageOrEmpty) {
-      console.log(`[INFO] ${messageOrEmpty}`, contextOrMessage);
+  info: (messageOrContext: string | any, contextOrEmpty?: any) => {
+    if (typeof messageOrContext === 'string') {
+      if (contextOrEmpty) {
+        console.log('[INFO] ' + messageOrContext, contextOrEmpty);
+      } else {
+        console.log('[INFO] ' + messageOrContext);
+      }
     } else {
-      console.log(`[INFO] ${contextOrMessage}`);
+      console.log('[INFO]', messageOrContext);
     }
   },
-  warn: (contextOrMessage: any, messageOrEmpty?: string) => {
-    if (messageOrEmpty) {
-      console.warn(`[WARN] ${messageOrEmpty}`, contextOrMessage);
+  warn: (messageOrContext: string | any, contextOrEmpty?: any) => {
+    if (typeof messageOrContext === 'string') {
+      if (contextOrEmpty) {
+        console.warn('[WARN] ' + messageOrContext, contextOrEmpty);
+      } else {
+        console.warn('[WARN] ' + messageOrContext);
+      }
     } else {
-      console.warn(`[WARN] ${contextOrMessage}`);
+      console.warn('[WARN]', messageOrContext);
     }
   },
-  error: (contextOrMessage: any, messageOrEmpty?: string) => {
-    if (messageOrEmpty) {
-      console.error(`[ERROR] ${messageOrEmpty}`, contextOrMessage);
+  error: (messageOrContext: string | any, contextOrEmpty?: any) => {
+    if (typeof messageOrContext === 'string') {
+      if (contextOrEmpty) {
+        console.error('[ERROR] ' + messageOrContext, contextOrEmpty);
+      } else {
+        console.error('[ERROR] ' + messageOrContext);
+      }
     } else {
-      console.error(`[ERROR] ${contextOrMessage}`);
+      console.error('[ERROR]', messageOrContext);
     }
   },
-  debug: (contextOrMessage: any, messageOrEmpty?: string) => {
-    if (messageOrEmpty) {
-      console.debug(`[DEBUG] ${messageOrEmpty}`, contextOrMessage);
+  debug: (messageOrContext: string | any, contextOrEmpty?: any) => {
+    if (typeof messageOrContext === 'string') {
+      if (contextOrEmpty) {
+        console.debug('[DEBUG] ' + messageOrContext, contextOrEmpty);
+      } else {
+        console.debug('[DEBUG] ' + messageOrContext);
+      }
     } else {
-      console.debug(`[DEBUG] ${contextOrMessage}`);
+      console.debug('[DEBUG]', messageOrContext);
     }
   }
 };

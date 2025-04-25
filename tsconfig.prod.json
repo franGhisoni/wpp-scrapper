@@ -2,7 +2,8 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "sourceMap": false,
-    "removeComments": true
+    "removeComments": true,
+    "forceConsistentCasingInFileNames": false
   },
   "exclude": [
     "node_modules",

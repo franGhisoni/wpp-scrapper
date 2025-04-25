@@ -46,7 +46,7 @@ export class GroupScanner {
    * Escanea múltiples grupos y devuelve sus miembros
    */
   public async scanGroups(groupNames: string[]): Promise<Record<string, ScanResult>> {
-    logger.info({ count: groupNames.length }, 'Iniciando escaneo de grupos');
+    logger.info('Iniciando escaneo de grupos', { count: groupNames.length });
     
     const results: Record<string, ScanResult> = {};
     
@@ -62,15 +62,15 @@ export class GroupScanner {
       30000 // Timeout en milisegundos (30 segundos)
     );
     
-    logger.info({ count: allChats.length }, 'Total chats obtenidos');
+    logger.info('Total chats obtenidos', { count: allChats.length });
     
     const allGroups = allChats.filter(chat => chat.isGroup);
-    logger.info({ count: allGroups.length }, 'Total grupos disponibles');
+    logger.info('Total grupos disponibles', { count: allGroups.length });
     
     // Procesar cada grupo
     for (const groupName of groupNames) {
       try {
-        logger.info({ group: groupName }, 'Escaneando grupo');
+        logger.info('Escaneando grupo', { group: groupName });
         
         const result = await this.withTimeout(
           () => this.scanSingleGroup(groupName, allGroups),
@@ -80,15 +80,15 @@ export class GroupScanner {
         results[groupName] = result;
         
         if (result.success) {
-          logger.info({ 
+          logger.info('Grupo escaneado con éxito', { 
             group: groupName, 
             members: result.members.length 
-          }, 'Grupo escaneado con éxito');
+          });
         } else {
-          logger.warn({ group: groupName, error: result.error }, 'Error al escanear grupo');
+          logger.warn('Error al escanear grupo', { group: groupName, error: result.error });
         }
       } catch (error) {
-        logger.error({ group: groupName, error }, 'Error al procesar grupo');
+        logger.error('Error al procesar grupo', { group: groupName, error });
         results[groupName] = { 
           name: groupName, 
           members: [],
@@ -121,7 +121,7 @@ export class GroupScanner {
         };
       }
       
-      logger.info({ group: foundGroup.name }, 'Grupo encontrado. Obteniendo participantes...');
+      logger.info('Grupo encontrado. Obteniendo participantes...', { group: foundGroup.name });
       
       // Obtener participantes con reintentos
       const participants = await retry<any[]>(
@@ -156,10 +156,10 @@ export class GroupScanner {
         } as GroupMember;
       });
       
-      logger.info({ 
+      logger.info('Participantes obtenidos', { 
         group: foundGroup.name, 
         count: members.length 
-      }, 'Participantes obtenidos');
+      });
       
       return {
         name: foundGroup.name,
@@ -167,10 +167,10 @@ export class GroupScanner {
         success: true
       };
     } catch (error) {
-      logger.error({ 
+      logger.error('Error en scanSingleGroup', { 
         group: groupName, 
         error 
-      }, 'Error en scanSingleGroup');
+      });
       
       return {
         name: groupName,
