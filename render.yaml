@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: wpp-scrapper
+    env: docker
+    dockerfilePath: ./Dockerfile
+    numInstances: 1
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3001
+      - key: BROWSER_HEADLESS
+        value: true
+      - key: AUTO_CLOSE_AFTER_SCAN
+        value: false
+      - key: AUTO_CLOSE_TIMEOUT
+        value: 300000 
